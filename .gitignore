@@ -3,3 +3,5 @@ scripts/*/*.cpython-*.pyc
 scripts/__pycache__
 lakehouse_benchmarks/__pycache__
 user_journey/iceberg_catalog.db
+agents_benchmarking/data/*
+.env
