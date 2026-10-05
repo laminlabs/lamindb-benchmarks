@@ -1,0 +1,19 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Virtual environments and local environment files
+.venv/
+.env
+.env.*
+!.env.example
+
+# Python tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# macOS
+.DS_Store
