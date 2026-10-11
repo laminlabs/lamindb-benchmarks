@@ -1,7 +1,3 @@
-# Passed to ln.track(params=...). experiment_script is launched as a subprocess
-# and is not a run-record column. Instances come from the environment:
-# LAMIN_CURRENT_INSTANCE (default laminlabs/lamindb-benchmarks) and
-# LAMIN_LOAD_INSTANCE (default laminlabs/lamindb-load-test).
 experiment_script: experiments/experiment_001.py
 n_rows: 10
 n_repetitions: 3

@@ -1,4 +1,4 @@
-"""Read benchmark parameters from ./config.yml."""
+"""Read benchmark parameters from a YAML config."""
 from __future__ import annotations
 
 import os
@@ -11,10 +11,23 @@ BENCHMARK_INSTANCE = "laminlabs/lamindb-benchmarks"
 LOAD_INSTANCE = "laminlabs/lamindb-load-test"
 BENCHMARK_INSTANCE_ENV = "LAMIN_CURRENT_INSTANCE"
 LOAD_INSTANCE_ENV = "LAMIN_LOAD_INSTANCE"
+CONFIG_ENV = "BENCHMARK_CONFIG"
 
 
-def read_config() -> dict:
-    path = (Path.cwd() / "config.yml").resolve()
+def read_config(path: Path | str | None = None) -> dict:
+    """Load a config file.
+
+    An explicit path wins. Otherwise use BENCHMARK_CONFIG, then ./config.yml.
+    Relative paths are resolved from the working directory.
+    """
+    if path is None:
+        env_path = os.environ.get(CONFIG_ENV, "").strip()
+        path = Path(env_path) if env_path else Path.cwd() / "config.yml"
+    else:
+        path = Path(path)
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    path = path.resolve()
     if not path.is_file():
         sys.exit(f"config not found: {path}")
     loaded = yaml.safe_load(path.read_text())

@@ -1,15 +1,17 @@
 """Connect to the benchmark instance, track parameters, run experiment_script.
 
-Parameters come from ./config.yml in the working directory. Every key is
-passed to ln.track(params=...). The file itself is not uploaded. The benchmark
-instance is LAMIN_CURRENT_INSTANCE or laminlabs/lamindb-benchmarks.
+Parameters come from an optional config path, BENCHMARK_CONFIG, or ./config.yml.
+Every key is passed to ln.track(params=...). The file itself is not uploaded.
+The benchmark instance is LAMIN_CURRENT_INSTANCE or laminlabs/lamindb-benchmarks.
 experiment_script is a path to a Python file, launched in a separate process,
-and is not a run-record column. Measurement parquet files it writes are
-uploaded as outputs of this run and linked to a run record on the experiment
-frame. Tracking ends after that process exits.
+and is not a run-record column. The child receives BENCHMARK_CONFIG so it reads
+the same file. Measurement parquet files it writes are uploaded as outputs of
+this run and linked to a run record on the experiment frame. Tracking ends
+after that process exits.
 """
 from __future__ import annotations
 
+import argparse
 import os
 import subprocess
 import sys
@@ -25,6 +27,7 @@ import lamindb as ln
 from benchmarks.config import (
     BENCHMARK_INSTANCE,
     BENCHMARK_INSTANCE_ENV,
+    CONFIG_ENV,
     instance_from_env,
     read_config,
 )
@@ -82,13 +85,32 @@ def _experiment_script(params: dict) -> Path:
     return path
 
 
-def main() -> None:
-    params = read_config()
+def _config_path(argv: list[str] | None = None) -> Path | None:
+    parser = argparse.ArgumentParser(description="Run one benchmark config.")
+    parser.add_argument(
+        "config",
+        nargs="?",
+        help="Config file. Default: BENCHMARK_CONFIG or ./config.yml.",
+    )
+    args = parser.parse_args(argv)
+    if args.config is None:
+        return None
+    path = Path(args.config)
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    return path.resolve()
+
+
+def main(argv: list[str] | None = None) -> None:
+    config_path = _config_path(argv)
+    params = read_config(config_path)
     experiment_script = _experiment_script(params)
     instance = instance_from_env(BENCHMARK_INSTANCE_ENV, BENCHMARK_INSTANCE)
 
     child_env = os.environ.copy()
     child_env.pop("LAMIN_INITIATED_BY_RUN_UID", None)
+    if config_path is not None:
+        child_env[CONFIG_ENV] = str(config_path)
 
     exit_code = 1
     ln.connect(instance)

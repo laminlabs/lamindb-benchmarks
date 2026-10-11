@@ -1,0 +1,3 @@
+experiment_script: experiments/experiment_001.py
+n_rows: 100
+n_repetitions: 3
