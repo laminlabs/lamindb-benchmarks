@@ -1,11 +1,12 @@
-"""Create or update the record for an experiment file, and one record per run.
+"""Create or update the record for an experiment folder, and one record per run.
 
-Re-runs update the same experiment record instead of creating a new one.
-Load Benchmarks is the parent type. The experiment record is a record frame
-under that parent: description and notes come from the experiment file, and
-its columns are the experiment parameters plus the run start time, a failed
-flag, and a link to the measurement artifacts. Each benchmark run is a data
-record of that frame, so the frame is the link to the experiment.
+An experiment is a folder with setup.py and query.py. Re-runs update the same
+experiment record instead of creating a new one. Load Benchmarks is the parent
+type. The experiment record is a record frame under that parent: description
+and notes come from those scripts, and its columns are the experiment
+parameters plus the run start time, a succeeded flag, and a link to the
+measurement artifacts. Each benchmark run is a data record of that frame, so
+the frame is the link to the experiment.
 """
 from __future__ import annotations
 
@@ -30,6 +31,8 @@ from benchmarks.config import (
 
 LOAD_BENCHMARKS = "Load Benchmarks"
 RUN_INDEX = "run_uid"
+SETUP_SCRIPT = "setup.py"
+QUERY_SCRIPT = "query.py"
 # name, stored dtype, constructor dtype, description
 RUN_FEATURES = (
     (
@@ -38,7 +41,7 @@ RUN_FEATURES = (
         "datetime64[ns, UTC]",
         "Start time of the benchmark run.",
     ),
-    ("failed", "bool", bool, "Whether the benchmark run exited non-zero."),
+    ("succeeded", "bool", bool, "Whether the benchmark run exited zero."),
     (
         "artifact",
         "list[cat[Artifact]]",
@@ -48,15 +51,22 @@ RUN_FEATURES = (
 )
 # Runner metadata, not experiment parameters. Kept out of the run sheet even
 # if an older config still contains them.
-EXCLUDED_COLUMN_KEYS = {"experiment_script", "setup_script", "instance", "load_instance"}
+EXCLUDED_COLUMN_KEYS = {
+    "experiment",
+    "experiment_script",
+    "setup_script",
+    "instance",
+    "load_instance",
+    "failed",
+}
 RESERVED_CONFIG_KEYS = {RUN_INDEX, *(name for name, *_rest in RUN_FEATURES)}
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Create or update the experiment record for a Python file."
+        description="Create or update the experiment record for a folder."
     )
-    parser.add_argument("experiment", help="Path to the experiment Python file.")
+    parser.add_argument("experiment", help="Path to an experiment folder with setup.py and query.py.")
     return parser.parse_args(argv)
 
 
@@ -65,11 +75,17 @@ def experiment_path(raw: str) -> Path:
     if not path.is_absolute():
         path = Path.cwd() / path
     path = path.resolve()
-    if not path.is_file():
-        sys.exit(f"experiment file not found: {path}")
-    if path.suffix != ".py":
-        sys.exit(f"experiment file must be a Python file: {path}")
+    if not path.is_dir():
+        sys.exit(f"experiment folder not found: {path}")
+    missing = [name for name in (SETUP_SCRIPT, QUERY_SCRIPT) if not (path / name).is_file()]
+    if missing:
+        sys.exit(f"experiment folder is missing {', '.join(missing)}: {path}")
     return path
+
+
+def stage_scripts(folder: Path) -> tuple[Path, Path]:
+    """setup.py then query.py. Caller must already have validated the folder."""
+    return folder / SETUP_SCRIPT, folder / QUERY_SCRIPT
 
 
 def relative_reference(path: Path) -> str:
@@ -262,6 +278,9 @@ def ensure_run_schema(
         if missing or extra:
             if ln.Record.filter(schema=schema).exclude(pk=experiment.pk).exists():
                 sys.exit(f"schema {schema.uid} is shared; refusing to change columns")
+            if missing:
+                schema.add(missing)
+            _migrate_failed_column(experiment, members, features["succeeded"])
             if extra:
                 optional_uids = set(schema.optionals.get_uids())
                 stale_optional = [
@@ -271,9 +290,26 @@ def ensure_run_schema(
                     schema.optionals.remove(stale_optional)
                 schema.remove(extra)
                 _clear_feature_values(experiment, extra)
-            if missing:
-                schema.add(missing)
     return index, features
+
+
+def _migrate_failed_column(
+    experiment: ln.Record, members: list[ln.Feature], succeeded: ln.Feature
+) -> None:
+    """Copy the old failed flag onto succeeded, inverted, before that column is dropped."""
+    failed = next((feature for feature in members if feature.name == "failed"), None)
+    if failed is None or failed.uid == succeeded.uid:
+        return
+    index = None if experiment.schema is None else experiment.schema.index
+    for record in ln.Record.filter(type=experiment, is_type=False):
+        values = record.features.get_values()
+        raw = values.get("failed")
+        if raw is None or "succeeded" in values:
+            continue
+        payload: dict[ln.Feature, object] = {succeeded: not bool(raw)}
+        if index is not None:
+            payload[index] = record.name
+        record.features.add_values(payload)
 
 
 def _clear_feature_values(experiment: ln.Record, features: list[ln.Feature]) -> None:
@@ -298,7 +334,7 @@ def record_run(
     """Create or update the data record for the active benchmark run.
 
     The record's type is the experiment frame. Its reference is the Lamin run
-    URL. The sheet stores the config, the run start time, whether it failed,
+    URL. The sheet stores the config, the run start time, whether it succeeded,
     and links to the measurement artifacts. Re-entering the same Lamin run
     updates that record instead of adding another row.
     """
@@ -313,7 +349,7 @@ def record_run(
         index: run.uid,
         **{features[name]: value for name, value in columns.items()},
         features["started_at"]: run.started_at,
-        features["failed"]: exit_code not in (None, 0),
+        features["succeeded"]: exit_code in (None, 0),
     }
     if artifacts:
         values[features["artifact"]] = artifacts
@@ -344,20 +380,49 @@ def record_run(
         record.features.set_values(values)
     if not experiment.input_of_runs.filter(pk=run.pk).exists():
         experiment.input_of_runs.add(run)
-    for artifact in artifacts:
-        if ln.models.ArtifactRecord.filter(
-            artifact=artifact, record=record, feature=None
-        ).exists():
-            continue
-        ln.models.ArtifactRecord(artifact=artifact, record=record).save()
+    _link_run_artifacts(record, features["artifact"], artifacts)
     return record
 
 
+def _link_run_artifacts(
+    record: ln.Record, feature: ln.Feature, artifacts: list[ln.Artifact]
+) -> None:
+    """Sheet column plus the record annotation. Both must exist for each file."""
+    for artifact in artifacts:
+        if not ln.models.RecordArtifact.filter(
+            record=record, feature=feature, value=artifact
+        ).exists():
+            ln.models.RecordArtifact(
+                record=record, feature=feature, value=artifact
+            ).save()
+        if not ln.models.ArtifactRecord.filter(
+            artifact=artifact, record=record, feature=None
+        ).exists():
+            ln.models.ArtifactRecord(artifact=artifact, record=record).save()
+        if not ln.models.RecordArtifact.filter(
+            record=record, feature=feature, value=artifact
+        ).exists():
+            sys.exit(f"artifact {artifact.uid} was not linked on run record {record.uid}")
+
+
+def experiment_docs(folder: Path) -> tuple[str | None, str | None]:
+    """Description is the first docstring line. Notes include both scripts."""
+    sections = []
+    description = None
+    for name in (SETUP_SCRIPT, QUERY_SCRIPT):
+        first, doc = docstring_parts(folder / name)
+        if description is None and first:
+            description = first
+        if doc:
+            sections.append(f"# {name}\n\n{doc}")
+    return description, "\n\n".join(sections) or None
+
+
 def sync_experiment(path: Path, params: dict | None = None) -> ln.Record:
-    """Update the experiment frame from the Python file. Caller must be connected."""
+    """Update the experiment frame from the folder. Caller must be connected."""
     parent = ensure_type(LOAD_BENCHMARKS)
-    experiment = ensure_type(path.stem, type_record=parent)
-    description, notes = docstring_parts(path)
+    experiment = ensure_type(path.name, type_record=parent)
+    description, notes = experiment_docs(path)
     reference = relative_reference(path)
     changed = False
     if experiment.description != description:

@@ -1,3 +1,3 @@
-experiment_script: experiments/experiment_001.py
+experiment: experiments/experiment_001
 n_rows: 1000
 n_repetitions: 3

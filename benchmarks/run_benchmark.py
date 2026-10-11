@@ -1,14 +1,14 @@
-"""Connect to the benchmark instance, track parameters, run experiment_script.
+"""Connect to the benchmark instance, track parameters, and run an experiment.
 
 Parameters come from an optional config path, BENCHMARK_CONFIG, or ./config.yml.
 Every key is passed to ln.track(params=...). The file itself is not uploaded.
 The benchmark instance is LAMIN_CURRENT_INSTANCE or laminlabs/lamindb-benchmarks.
-experiment_script is a path to a Python file, launched in a separate process,
-and is not a run-record column. The child receives BENCHMARK_CONFIG so it reads
-the same file. Measurement parquet files it writes are uploaded as outputs of
-this run. The artifact key gets this run's uid after the experiment name, then
-the artifact is linked to a run record on the experiment frame. Tracking ends
-after that process exits.
+experiment is a folder containing setup.py and query.py. They are launched in
+separate processes, setup first, and are not run-record columns. Each child
+receives BENCHMARK_CONFIG so it reads the same file. Measurement parquet files
+are uploaded as outputs of this run. The artifact key gets this run's uid after
+the experiment name, then the artifact is linked to a run record on the
+experiment frame. Tracking ends after those processes exit.
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ from benchmarks.config import (
     instance_from_env,
     read_config,
 )
-from benchmarks.experiment import record_run, sync_experiment
+from benchmarks.experiment import experiment_path, record_run, stage_scripts, sync_experiment
 from benchmarks.measurements import RESULTS_DIR_ENV, load_measurements
 
 
@@ -55,7 +55,7 @@ def _ensure_feature(name: str, dtype: str) -> ln.Feature:
     return ln.Feature(name=name, dtype=dtype).save()
 
 
-def measurement_artifact_key(key: str, experiment_script: Path, run_uid: str) -> str:
+def measurement_artifact_key(key: str, experiment: Path, run_uid: str) -> str:
     """Insert the benchmark run uid after the experiment name.
 
     benchmarks/measurements/experiment_001/record_count.parquet becomes
@@ -65,7 +65,7 @@ def measurement_artifact_key(key: str, experiment_script: Path, run_uid: str) ->
         sys.exit(f"invalid run uid for artifact key: {run_uid!r}")
     parts = Path(key).parts
     try:
-        index = parts.index(experiment_script.stem)
+        index = parts.index(experiment.name)
     except ValueError:
         index = max(len(parts) - 1, 0)
         parts = (*parts[:index], run_uid, *parts[index:])
@@ -80,9 +80,12 @@ def upload_measurements(
     directory: Path,
     instance: str,
     *,
-    experiment_script: Path,
+    experiment: Path,
     run_uid: str,
 ) -> list[ln.Artifact]:
+    run = ln.context.run
+    if run is None or run.uid != run_uid:
+        sys.exit("upload_measurements requires the active benchmark run")
     artifacts = []
     for item in load_measurements(directory):
         features = {
@@ -91,26 +94,21 @@ def upload_measurements(
         }
         artifact = ln.Artifact.from_dataframe(
             item["path"],
-            key=measurement_artifact_key(item["key"], experiment_script, run_uid),
+            key=measurement_artifact_key(item["key"], experiment, run_uid),
             description=item["description"],
             features=features,
+            run=run,
         ).save()
         artifacts.append(artifact)
         print(f"measurement: https://lamin.ai/{instance}/artifact/{artifact.uid}")
     return artifacts
 
 
-def _experiment_script(params: dict) -> Path:
-    raw = params.get("experiment_script")
+def _experiment(params: dict) -> Path:
+    raw = params.get("experiment")
     if not isinstance(raw, str) or not raw.strip():
-        sys.exit("parameters must include experiment_script: path to a Python file")
-    path = Path(raw)
-    if not path.is_absolute():
-        path = Path.cwd() / path
-    path = path.resolve()
-    if not path.is_file():
-        sys.exit(f"experiment_script not found: {path}")
-    return path
+        sys.exit("parameters must include experiment: path to an experiment folder")
+    return experiment_path(raw)
 
 
 def _config_path(argv: list[str] | None = None) -> Path | None:
@@ -132,7 +130,7 @@ def _config_path(argv: list[str] | None = None) -> Path | None:
 def main(argv: list[str] | None = None) -> None:
     config_path = _config_path(argv)
     params = read_config(config_path)
-    experiment_script = _experiment_script(params)
+    experiment = _experiment(params)
     instance = instance_from_env(BENCHMARK_INSTANCE_ENV, BENCHMARK_INSTANCE)
 
     child_env = os.environ.copy()
@@ -147,21 +145,26 @@ def main(argv: list[str] | None = None) -> None:
         run = ln.context.run
         if run is None:
             sys.exit("benchmark run is missing after ln.track()")
-        record = sync_experiment(experiment_script, params)
+        record = sync_experiment(experiment, params)
         print(f"experiment: https://lamin.ai/{instance}/record/{record.uid}")
         with tempfile.TemporaryDirectory(prefix="benchmark-results-") as raw_results:
             child_env[RESULTS_DIR_ENV] = raw_results
-            completed = subprocess.run(
-                [sys.executable, str(experiment_script)],
-                check=False,
-                env=child_env,
-            )
-            exit_code = completed.returncode
-            # The child can fail in ln.finish() after the parquet is written.
+            exit_code = 0
+            for script in stage_scripts(experiment):
+                print(f"run {script.name}")
+                completed = subprocess.run(
+                    [sys.executable, str(script)],
+                    check=False,
+                    env=child_env,
+                )
+                exit_code = completed.returncode
+                if exit_code != 0:
+                    print(f"[warn] {script.name} exited {exit_code}; stopping")
+                    break
             artifacts = upload_measurements(
                 Path(raw_results),
                 instance,
-                experiment_script=experiment_script,
+                experiment=experiment,
                 run_uid=run.uid,
             )
             run_record = record_run(
