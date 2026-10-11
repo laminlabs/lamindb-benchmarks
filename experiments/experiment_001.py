@@ -1,6 +1,7 @@
 """Example load-instance experiment launched by benchmarks/run_benchmark.py.
 
-Parameters come from ./config.yml in the working directory.
+Parameters come from ./config.yml in the working directory. The load
+instance is LAMIN_LOAD_INSTANCE or laminlabs/lamindb-load-test.
 
 Usage:
   python experiments/experiment_001.py
@@ -22,12 +23,17 @@ if str(_ROOT) not in sys.path:
 
 import lamindb as ln
 
-from benchmarks.config import read_config, require_int, require_str
+from benchmarks.config import (
+    LOAD_INSTANCE,
+    LOAD_INSTANCE_ENV,
+    instance_from_env,
+    read_config,
+    require_int,
+)
 from benchmarks.measurements import write_measurement
 from benchmarks.setup import create_records
 from benchmarks.timing import rows_from_timed, time_calls
 
-LOAD_INSTANCE = "laminlabs/lamindb-load-test"
 NAME_PREFIX = "experiment_001"
 DEFAULT_REPETITIONS = 3
 
@@ -95,7 +101,7 @@ def main(argv: list[str] | None = None) -> None:
     if repetitions is not None:
         tracked["n_repetitions"] = repetitions
 
-    ln.connect(require_str(params, "load_instance", LOAD_INSTANCE))
+    ln.connect(instance_from_env(LOAD_INSTANCE_ENV, LOAD_INSTANCE))
     ln.track(params=tracked)
     try:
         if run_setup:

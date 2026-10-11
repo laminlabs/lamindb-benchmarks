@@ -1,10 +1,16 @@
 """Read benchmark parameters from ./config.yml."""
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 import yaml
+
+BENCHMARK_INSTANCE = "laminlabs/lamindb-benchmarks"
+LOAD_INSTANCE = "laminlabs/lamindb-load-test"
+BENCHMARK_INSTANCE_ENV = "LAMIN_CURRENT_INSTANCE"
+LOAD_INSTANCE_ENV = "LAMIN_LOAD_INSTANCE"
 
 
 def read_config() -> dict:
@@ -15,6 +21,12 @@ def read_config() -> dict:
     if not isinstance(loaded, dict):
         sys.exit("config must be a YAML mapping")
     return loaded
+
+
+def instance_from_env(env_name: str, default: str) -> str:
+    """Instance slug from the environment, or the code default when unset."""
+    value = os.environ.get(env_name, "").strip()
+    return value or default
 
 
 def require_str(params: dict, key: str, default: str | None = None) -> str:

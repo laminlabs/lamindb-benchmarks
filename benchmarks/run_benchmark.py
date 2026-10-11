@@ -1,10 +1,12 @@
-"""Connect to the benchmark instance, track parameters, run setup_script.
+"""Connect to the benchmark instance, track parameters, run experiment_script.
 
 Parameters come from ./config.yml in the working directory. Every key is
-passed to ln.track(params=...). The file itself is not uploaded. setup_script
-is a path to a Python file, launched in a separate process. Measurement
-parquet files it writes are uploaded as outputs of this run. Tracking ends
-after that process exits.
+passed to ln.track(params=...). The file itself is not uploaded. The benchmark
+instance is LAMIN_CURRENT_INSTANCE or laminlabs/lamindb-benchmarks.
+experiment_script is a path to a Python file, launched in a separate process,
+and is not a run-record column. Measurement parquet files it writes are
+uploaded as outputs of this run and linked to a run record on the experiment
+frame. Tracking ends after that process exits.
 """
 from __future__ import annotations
 
@@ -20,10 +22,14 @@ if str(_ROOT) not in sys.path:
 
 import lamindb as ln
 
-from benchmarks.config import read_config, require_str
+from benchmarks.config import (
+    BENCHMARK_INSTANCE,
+    BENCHMARK_INSTANCE_ENV,
+    instance_from_env,
+    read_config,
+)
+from benchmarks.experiment import record_run, sync_experiment
 from benchmarks.measurements import RESULTS_DIR_ENV, load_measurements
-
-BENCHMARK_INSTANCE = "laminlabs/lamindb-benchmarks"
 
 
 def _feature_dtype(value: object) -> str:
@@ -45,7 +51,8 @@ def _ensure_feature(name: str, dtype: str) -> ln.Feature:
     return ln.Feature(name=name, dtype=dtype).save()
 
 
-def upload_measurements(directory: Path, instance: str) -> None:
+def upload_measurements(directory: Path, instance: str) -> list[ln.Artifact]:
+    artifacts = []
     for item in load_measurements(directory):
         features = {
             _ensure_feature(name, _feature_dtype(value)): value
@@ -57,26 +64,28 @@ def upload_measurements(directory: Path, instance: str) -> None:
             description=item["description"],
             features=features,
         ).save()
+        artifacts.append(artifact)
         print(f"measurement: https://lamin.ai/{instance}/artifact/{artifact.uid}")
+    return artifacts
 
 
-def _setup_script(params: dict) -> Path:
-    raw = params.get("setup_script")
+def _experiment_script(params: dict) -> Path:
+    raw = params.get("experiment_script")
     if not isinstance(raw, str) or not raw.strip():
-        sys.exit("parameters must include setup_script: path to a Python file")
+        sys.exit("parameters must include experiment_script: path to a Python file")
     path = Path(raw)
     if not path.is_absolute():
         path = Path.cwd() / path
     path = path.resolve()
     if not path.is_file():
-        sys.exit(f"setup_script not found: {path}")
+        sys.exit(f"experiment_script not found: {path}")
     return path
 
 
 def main() -> None:
     params = read_config()
-    setup_script = _setup_script(params)
-    instance = require_str(params, "instance", BENCHMARK_INSTANCE)
+    experiment_script = _experiment_script(params)
+    instance = instance_from_env(BENCHMARK_INSTANCE_ENV, BENCHMARK_INSTANCE)
 
     child_env = os.environ.copy()
     child_env.pop("LAMIN_INITIATED_BY_RUN_UID", None)
@@ -85,16 +94,22 @@ def main() -> None:
     ln.connect(instance)
     ln.track(params=params)
     try:
+        record = sync_experiment(experiment_script, params)
+        print(f"experiment: https://lamin.ai/{instance}/record/{record.uid}")
         with tempfile.TemporaryDirectory(prefix="benchmark-results-") as raw_results:
             child_env[RESULTS_DIR_ENV] = raw_results
             completed = subprocess.run(
-                [sys.executable, str(setup_script)],
+                [sys.executable, str(experiment_script)],
                 check=False,
                 env=child_env,
             )
             exit_code = completed.returncode
             # The child can fail in ln.finish() after the parquet is written.
-            upload_measurements(Path(raw_results), instance)
+            artifacts = upload_measurements(Path(raw_results), instance)
+            run_record = record_run(
+                record, params, artifacts, instance=instance, exit_code=exit_code
+            )
+            print(f"run: https://lamin.ai/{instance}/record/{run_record.uid}")
     finally:
         ln.finish()
     raise SystemExit(exit_code)
