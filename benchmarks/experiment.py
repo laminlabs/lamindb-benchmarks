@@ -1,16 +1,19 @@
 """Create or update the record page for an experiment folder.
 
-An experiment is a folder with setup.py and query.py. Load Benchmarks is the
-parent type. The experiment record is a page under that parent. Its runs
+An experiment is a folder with a README, setup.py, and query.py. README
+frontmatter supplies the description. The README body is the notes. Load
+Benchmarks is the parent type. The experiment record is a page under that
+parent. Its runs
 child is the record frame for benchmark runs. Its analysis child is the
 record frame for analysis records, which link the artifacts they produced.
 """
 from __future__ import annotations
 
 import argparse
-import ast
 import sys
 from pathlib import Path
+
+import yaml
 
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
@@ -31,6 +34,7 @@ RUNS_TYPE = "runs"
 ANALYSIS_TYPE = "analysis"
 RUN_INDEX = "run_uid"
 ANALYSIS_INDEX = "analysis_uid"
+README = "README.md"
 SETUP_SCRIPT = "setup.py"
 QUERY_SCRIPT = "query.py"
 # name, stored dtype, constructor dtype, description
@@ -66,7 +70,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Create or update the experiment record for a folder."
     )
-    parser.add_argument("experiment", help="Path to an experiment folder with setup.py and query.py.")
+    parser.add_argument(
+        "experiment",
+        help="Path to an experiment folder with a README, setup.py, and query.py.",
+    )
     return parser.parse_args(argv)
 
 
@@ -77,7 +84,8 @@ def experiment_path(raw: str) -> Path:
     path = path.resolve()
     if not path.is_dir():
         sys.exit(f"experiment folder not found: {path}")
-    missing = [name for name in (SETUP_SCRIPT, QUERY_SCRIPT) if not (path / name).is_file()]
+    required = (README, SETUP_SCRIPT, QUERY_SCRIPT)
+    missing = [name for name in required if not (path / name).is_file()]
     if missing:
         sys.exit(f"experiment folder is missing {', '.join(missing)}: {path}")
     return path
@@ -93,17 +101,6 @@ def relative_reference(path: Path) -> str:
         return path.relative_to(Path.cwd().resolve()).as_posix()
     except ValueError:
         return path.as_posix()
-
-
-def docstring_parts(path: Path) -> tuple[str | None, str | None]:
-    try:
-        doc = ast.get_docstring(ast.parse(path.read_text()))
-    except SyntaxError as error:
-        sys.exit(f"could not read docstring from {path}: {error}")
-    if not doc:
-        return None, None
-    first = doc.splitlines()[0].strip()
-    return first or None, doc
 
 
 def record_by_name(name: str, *, type_record: ln.Record | None = None) -> ln.Record | None:
@@ -399,21 +396,31 @@ def ensure_analysis_frame(experiment: ln.Record) -> ln.Record:
     """A sheet, not a page: each analysis is one row that links its artifacts."""
     frame = ensure_type(ANALYSIS_TYPE, type_record=experiment)
     frame = _set_description(frame, f"Analyses of {experiment.name}.")
-    if frame.schema is not None:
-        return frame
     index = ensure_analysis_index(frame, experiment.name)
+    title = ensure_described_feature("title", "str", str, "Title of the analysis.")
     metadata = run_metadata_features()
-    members = [metadata["started_at"], metadata["artifact"]]
-    schema = ln.Schema(
-        [feature.with_config(optional=True) for feature in members],
-        index=index,
-        name=f"{experiment.name} analysis",
-        description=f"Analysis records for {experiment.name}.",
-    ).save()
-    if ln.Record.filter(schema=schema).exclude(pk=frame.pk).exists():
-        sys.exit(f"schema {schema.uid} is already used by another record")
-    frame.schema = schema
-    frame.save()
+    members = [title, metadata["started_at"], metadata["artifact"]]
+    if frame.schema is None:
+        schema = ln.Schema(
+            [feature.with_config(optional=True) for feature in members],
+            index=index,
+            name=f"{experiment.name} analysis",
+            description=f"Analysis records for {experiment.name}.",
+        ).save()
+        if ln.Record.filter(schema=schema).exclude(pk=frame.pk).exists():
+            sys.exit(f"schema {schema.uid} is already used by another record")
+        frame.schema = schema
+        frame.save()
+        return frame
+    schema = frame.schema
+    if schema.index is None or schema.index.uid != index.uid:
+        sys.exit(f"{frame.name} schema is not indexed by its analysis uid")
+    present = {feature.name for feature in schema.members.all()}
+    missing = [feature for feature in members if feature.name not in present]
+    if missing:
+        if ln.Record.filter(schema=schema).exclude(pk=frame.pk).exists():
+            sys.exit(f"schema {schema.uid} is shared; refusing to change columns")
+        schema.add(missing)
     return frame
 
 
@@ -492,8 +499,15 @@ def record_analysis(
     artifacts: list[ln.Artifact],
     *,
     instance: str,
+    title: str | None = None,
+    description: str | None = None,
+    notes: str | None = None,
 ) -> ln.Record:
-    """Create or update the analysis row for the active run and link its artifacts."""
+    """Create or update the analysis row for the active run and link its artifacts.
+
+    Title is a sheet column. The row name stays the analysis run uid. Description
+    and notes are the record description and readme.
+    """
     run = ln.context.run
     if run is None:
         sys.exit("record_analysis requires an active ln.track() run")
@@ -501,6 +515,10 @@ def record_analysis(
         sys.exit("analysis run has no start time")
     if not artifacts:
         sys.exit("analysis record requires artifacts")
+    if title is not None and not title.strip():
+        sys.exit("analysis title must be a non-empty string")
+    if description is not None and not description.strip():
+        sys.exit("analysis description must be a non-empty string")
     frame = ensure_analysis_frame(experiment)
     if frame.schema is None or frame.schema.index is None:
         sys.exit(f"{frame.name} has no indexed schema")
@@ -508,14 +526,21 @@ def record_analysis(
     features = {feature.name: feature for feature in frame.schema.members.all()}
     artifact_feature = features.get("artifact")
     started_at = features.get("started_at")
-    if artifact_feature is None or started_at is None:
-        sys.exit(f"{frame.name} schema is missing started_at or artifact")
+    title_feature = features.get("title")
+    if artifact_feature is None or started_at is None or title_feature is None:
+        sys.exit(f"{frame.name} schema is missing title, started_at, or artifact")
     values = {
         index: run.uid,
         started_at: run.started_at,
         artifact_feature: artifacts,
     }
-    description = f"Analysis of {experiment.name}."
+    if title is not None:
+        values[title_feature] = title.strip()
+    description = (
+        description.strip()
+        if description is not None
+        else f"Analysis of {experiment.name}."
+    )
     reference = f"https://lamin.ai/{instance}/run/{run.uid}"
     record = ln.Record.filter(type=frame, name=run.uid).one_or_none()
     if record is None:
@@ -541,6 +566,8 @@ def record_analysis(
     if not frame.input_of_runs.filter(pk=run.pk).exists():
         frame.input_of_runs.add(run)
     _link_run_artifacts(record, artifact_feature, artifacts)
+    if notes is not None:
+        set_notes(record, notes)
     return record
 
 
@@ -565,17 +592,28 @@ def _link_run_artifacts(
             sys.exit(f"artifact {artifact.uid} was not linked on run record {record.uid}")
 
 
-def experiment_docs(folder: Path) -> tuple[str | None, str | None]:
-    """Description is the first docstring line. Notes include both scripts."""
-    sections = []
-    description = None
-    for name in (SETUP_SCRIPT, QUERY_SCRIPT):
-        first, doc = docstring_parts(folder / name)
-        if description is None and first:
-            description = first
-        if doc:
-            sections.append(f"# {name}\n\n{doc}")
-    return description, "\n\n".join(sections) or None
+def experiment_docs(folder: Path) -> tuple[str, str]:
+    """Description comes from README frontmatter. Notes are the body."""
+    path = folder / README
+    lines = path.read_text().splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        sys.exit(f"experiment README is missing frontmatter: {path}")
+    end = next(
+        (index for index, line in enumerate(lines[1:], start=1) if line.strip() == "---"),
+        None,
+    )
+    if end is None:
+        sys.exit(f"experiment README frontmatter is not closed: {path}")
+    try:
+        meta = yaml.safe_load("".join(lines[1:end]))
+    except yaml.YAMLError as error:
+        sys.exit(f"could not read README frontmatter in {path}: {error}")
+    if not isinstance(meta, dict):
+        sys.exit(f"experiment README frontmatter must be a mapping: {path}")
+    description = meta.get("description")
+    if not isinstance(description, str) or not description.strip():
+        sys.exit(f"experiment README frontmatter needs a description: {path}")
+    return description.strip(), "".join(lines[end + 1 :]).lstrip("\n")
 
 
 def sync_experiment(path: Path, params: dict | None = None) -> ln.Record:
