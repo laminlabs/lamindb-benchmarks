@@ -1,0 +1,6 @@
+# Passed to ln.track(params=...). setup_script is launched as a subprocess.
+instance: laminlabs/lamindb-benchmarks
+setup_script: experiments/experiment_001.py
+load_instance: laminlabs/lamindb-load-test
+n_rows: 10
+n_repetitions: 3
