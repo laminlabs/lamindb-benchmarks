@@ -6,7 +6,8 @@ The benchmark instance is LAMIN_CURRENT_INSTANCE or laminlabs/lamindb-benchmarks
 experiment_script is a path to a Python file, launched in a separate process,
 and is not a run-record column. The child receives BENCHMARK_CONFIG so it reads
 the same file. Measurement parquet files it writes are uploaded as outputs of
-this run and linked to a run record on the experiment frame. Tracking ends
+this run. The artifact key gets this run's uid after the experiment name, then
+the artifact is linked to a run record on the experiment frame. Tracking ends
 after that process exits.
 """
 from __future__ import annotations
@@ -54,7 +55,34 @@ def _ensure_feature(name: str, dtype: str) -> ln.Feature:
     return ln.Feature(name=name, dtype=dtype).save()
 
 
-def upload_measurements(directory: Path, instance: str) -> list[ln.Artifact]:
+def measurement_artifact_key(key: str, experiment_script: Path, run_uid: str) -> str:
+    """Insert the benchmark run uid after the experiment name.
+
+    benchmarks/measurements/experiment_001/record_count.parquet becomes
+    benchmarks/measurements/experiment_001/<run_uid>/record_count.parquet.
+    """
+    if not run_uid or run_uid in {".", ".."} or "/" in run_uid or "\\" in run_uid:
+        sys.exit(f"invalid run uid for artifact key: {run_uid!r}")
+    parts = Path(key).parts
+    try:
+        index = parts.index(experiment_script.stem)
+    except ValueError:
+        index = max(len(parts) - 1, 0)
+        parts = (*parts[:index], run_uid, *parts[index:])
+        return Path(*parts).as_posix()
+    if index + 1 < len(parts) and parts[index + 1] == run_uid:
+        return Path(*parts).as_posix()
+    parts = (*parts[: index + 1], run_uid, *parts[index + 1 :])
+    return Path(*parts).as_posix()
+
+
+def upload_measurements(
+    directory: Path,
+    instance: str,
+    *,
+    experiment_script: Path,
+    run_uid: str,
+) -> list[ln.Artifact]:
     artifacts = []
     for item in load_measurements(directory):
         features = {
@@ -63,7 +91,7 @@ def upload_measurements(directory: Path, instance: str) -> list[ln.Artifact]:
         }
         artifact = ln.Artifact.from_dataframe(
             item["path"],
-            key=item["key"],
+            key=measurement_artifact_key(item["key"], experiment_script, run_uid),
             description=item["description"],
             features=features,
         ).save()
@@ -116,6 +144,9 @@ def main(argv: list[str] | None = None) -> None:
     ln.connect(instance)
     ln.track(params=params)
     try:
+        run = ln.context.run
+        if run is None:
+            sys.exit("benchmark run is missing after ln.track()")
         record = sync_experiment(experiment_script, params)
         print(f"experiment: https://lamin.ai/{instance}/record/{record.uid}")
         with tempfile.TemporaryDirectory(prefix="benchmark-results-") as raw_results:
@@ -127,7 +158,12 @@ def main(argv: list[str] | None = None) -> None:
             )
             exit_code = completed.returncode
             # The child can fail in ln.finish() after the parquet is written.
-            artifacts = upload_measurements(Path(raw_results), instance)
+            artifacts = upload_measurements(
+                Path(raw_results),
+                instance,
+                experiment_script=experiment_script,
+                run_uid=run.uid,
+            )
             run_record = record_run(
                 record, params, artifacts, instance=instance, exit_code=exit_code
             )

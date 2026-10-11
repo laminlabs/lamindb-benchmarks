@@ -3,9 +3,9 @@
 Re-runs update the same experiment record instead of creating a new one.
 Load Benchmarks is the parent type. The experiment record is a record frame
 under that parent: description and notes come from the experiment file, and
-its columns are the experiment parameters. Each benchmark run is a data record of
-that frame, so the frame is the link to the experiment. Result artifacts are
-linked from the run record.
+its columns are the experiment parameters plus the run start time, a failed
+flag, and a link to the measurement artifacts. Each benchmark run is a data
+record of that frame, so the frame is the link to the experiment.
 """
 from __future__ import annotations
 
@@ -30,9 +30,26 @@ from benchmarks.config import (
 
 LOAD_BENCHMARKS = "Load Benchmarks"
 RUN_INDEX = "run_uid"
+# name, stored dtype, constructor dtype, description
+RUN_FEATURES = (
+    (
+        "started_at",
+        "datetime64[ns, UTC]",
+        "datetime64[ns, UTC]",
+        "Start time of the benchmark run.",
+    ),
+    ("failed", "bool", bool, "Whether the benchmark run exited non-zero."),
+    (
+        "artifact",
+        "list[cat[Artifact]]",
+        list[ln.Artifact],
+        "Measurement artifacts linked from the benchmark run.",
+    ),
+)
 # Runner metadata, not experiment parameters. Kept out of the run sheet even
 # if an older config still contains them.
 EXCLUDED_COLUMN_KEYS = {"experiment_script", "setup_script", "instance", "load_instance"}
+RESERVED_CONFIG_KEYS = {RUN_INDEX, *(name for name, *_rest in RUN_FEATURES)}
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -130,7 +147,7 @@ def config_columns(params: dict) -> dict[str, object]:
     for key, value in params.items():
         if not isinstance(key, str) or not key.strip():
             sys.exit(f"config key must be a non-empty string, got {key!r}")
-        if key == RUN_INDEX:
+        if key in RESERVED_CONFIG_KEYS:
             sys.exit(f"config key {key!r} is reserved")
         if key in EXCLUDED_COLUMN_KEYS:
             continue
@@ -158,6 +175,28 @@ def ensure_feature(name: str, dtype: str) -> ln.Feature:
     if feature.dtype_as_str != dtype:
         sys.exit(f"feature {name!r} has dtype {feature.dtype_as_str}, not {dtype}")
     return feature
+
+
+def ensure_described_feature(
+    name: str, dtype_str: str, dtype: object, description: str
+) -> ln.Feature:
+    feature = ln.Feature.filter(
+        name=name, description=description, is_type=False
+    ).one_or_none()
+    if feature is None:
+        if ln.Feature.filter(name=name, is_type=False).exists():
+            sys.exit(f"feature {name!r} exists with a different description")
+        return ln.Feature(name=name, dtype=dtype, description=description).save()
+    if feature.dtype_as_str != dtype_str:
+        sys.exit(f"feature {name!r} has dtype {feature.dtype_as_str}, not {dtype_str}")
+    return feature
+
+
+def run_metadata_features() -> dict[str, ln.Feature]:
+    return {
+        name: ensure_described_feature(name, dtype_str, dtype, description)
+        for name, dtype_str, dtype, description in RUN_FEATURES
+    }
 
 
 def ensure_run_index(experiment: ln.Record) -> ln.Feature:
@@ -196,6 +235,7 @@ def ensure_run_schema(
         name: ensure_feature(name, feature_dtype(value))
         for name, value in columns.items()
     }
+    features.update(run_metadata_features())
     schema = experiment.schema
     if schema is None:
         schema = ln.Schema(
@@ -258,15 +298,25 @@ def record_run(
     """Create or update the data record for the active benchmark run.
 
     The record's type is the experiment frame. Its reference is the Lamin run
-    URL. Re-entering the same Lamin run updates that record instead of adding
-    another row.
+    URL. The sheet stores the config, the run start time, whether it failed,
+    and links to the measurement artifacts. Re-entering the same Lamin run
+    updates that record instead of adding another row.
     """
     run = ln.context.run
     if run is None:
         sys.exit("record_run requires an active ln.track() run")
+    if run.started_at is None:
+        sys.exit("benchmark run has no start time")
     columns = config_columns(params)
     index, features = ensure_run_schema(experiment, columns)
-    values = {index: run.uid, **{features[name]: value for name, value in columns.items()}}
+    values = {
+        index: run.uid,
+        **{features[name]: value for name, value in columns.items()},
+        features["started_at"]: run.started_at,
+        features["failed"]: exit_code not in (None, 0),
+    }
+    if artifacts:
+        values[features["artifact"]] = artifacts
     description = f"Benchmark run of {experiment.name}."
     if exit_code is not None:
         description = f"{description} Exit code {exit_code}."

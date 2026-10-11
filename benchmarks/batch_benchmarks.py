@@ -104,16 +104,13 @@ def main(argv: list[str] | None = None) -> None:
         run = ln.context.run
         if run is None:
             sys.exit("batch_benchmarks requires an active ln.track() run")
-        # ln.track() reads this variable but does not export it. Set it so each
-        # benchmark run records this batch as initiated_by. Reset must not see it:
-        # that process connects to the load instance.
+        # ln.track() reads this variable but does not export it. Set it so the
+        # reset and each benchmark run record this batch as initiated_by.
         benchmark_env = os.environ.copy()
         benchmark_env["LAMIN_INITIATED_BY_RUN_UID"] = run.uid
-        reset_env = os.environ.copy()
-        reset_env.pop("LAMIN_INITIATED_BY_RUN_UID", None)
         for path in files:
             print(f"reset before {path.name}")
-            reset_code = _run(RESET_SCRIPT, ["--yes"], reset_env)
+            reset_code = _run(RESET_SCRIPT, ["--yes"], benchmark_env)
             if reset_code != 0:
                 sys.exit(f"reset failed before {path.name} (exit {reset_code})")
             print(f"run {path}")

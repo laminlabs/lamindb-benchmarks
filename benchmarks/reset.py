@@ -1,11 +1,15 @@
 """Wipe a benchmark target instance. Refuses to run without --yes.
 
+Tracked on the benchmark instance. The target is wiped in a child process,
+because a live ln.track() cannot switch instances.
+
 Usage:
   python benchmarks/reset.py --yes
   python benchmarks/reset.py --yes --instance owner/name
 """
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -15,7 +19,12 @@ if str(_ROOT) not in sys.path:
 
 import lamindb as ln
 
-from benchmarks.config import BENCHMARK_INSTANCE, LOAD_INSTANCE
+from benchmarks.config import (
+    BENCHMARK_INSTANCE,
+    BENCHMARK_INSTANCE_ENV,
+    LOAD_INSTANCE,
+    instance_from_env,
+)
 
 KEEP = {
     "django_migrations",
@@ -46,7 +55,37 @@ def main():
     target = LOAD_INSTANCE
     if "--instance" in sys.argv:
         target = sys.argv[sys.argv.index("--instance") + 1]
+    if "--wipe-only" in sys.argv:
+        _wipe(target)
+        return
+    # Track the benchmark instance, not the database being wiped. TRUNCATE CASCADE
+    # on the target deletes the transform this process would otherwise finish.
+    # The wipe runs in a child process: ln.track() cannot stay open across connect().
+    tracking_instance = instance_from_env(BENCHMARK_INSTANCE_ENV, BENCHMARK_INSTANCE)
+    if tracking_instance == target:
+        _wipe(target)
+        return
+    ln.connect(tracking_instance)
+    ln.track()
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "--yes",
+                "--wipe-only",
+                "--instance",
+                target,
+            ],
+            check=False,
+        )
+        if completed.returncode != 0:
+            sys.exit(completed.returncode)
+    finally:
+        ln.finish()
 
+
+def _wipe(target: str) -> None:
     ln.connect(target, use_root_db_user=True)
     conn = _pg(ln.setup.settings.instance.db)
     with conn.cursor() as cur:
