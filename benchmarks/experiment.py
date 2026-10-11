@@ -1,12 +1,9 @@
-"""Create or update the record for an experiment folder, and one record per run.
+"""Create or update the record page for an experiment folder.
 
-An experiment is a folder with setup.py and query.py. Re-runs update the same
-experiment record instead of creating a new one. Load Benchmarks is the parent
-type. The experiment record is a record frame under that parent: description
-and notes come from those scripts, and its columns are the experiment
-parameters plus the run start time, a succeeded flag, and a link to the
-measurement artifacts. Each benchmark run is a data record of that frame, so
-the frame is the link to the experiment.
+An experiment is a folder with setup.py and query.py. Load Benchmarks is the
+parent type. The experiment record is a page under that parent. Its runs
+child is the record frame for benchmark runs. Its analysis child is the
+record frame for analysis records, which link the artifacts they produced.
 """
 from __future__ import annotations
 
@@ -30,7 +27,10 @@ from benchmarks.config import (
 )
 
 LOAD_BENCHMARKS = "Load Benchmarks"
+RUNS_TYPE = "runs"
+ANALYSIS_TYPE = "analysis"
 RUN_INDEX = "run_uid"
+ANALYSIS_INDEX = "analysis_uid"
 SETUP_SCRIPT = "setup.py"
 QUERY_SCRIPT = "query.py"
 # name, stored dtype, constructor dtype, description
@@ -215,14 +215,14 @@ def run_metadata_features() -> dict[str, ln.Feature]:
     }
 
 
-def ensure_run_index(experiment: ln.Record) -> ln.Feature:
+def ensure_run_index(frame: ln.Record, experiment_name: str) -> ln.Feature:
     """One index feature per experiment, so run sheets do not share a schema.
 
     Schema identity is the set of feature uids. A shared index would make two
     experiments with the same config share one schema, and adding a column to
     one would change the other.
     """
-    extra = dict(experiment.extra_data or {})
+    extra = dict(frame.extra_data or {})
     stored = extra.get("run_index_feature_uid")
     if isinstance(stored, str):
         feature = ln.Feature.filter(uid=stored).one_or_none()
@@ -230,43 +230,44 @@ def ensure_run_index(experiment: ln.Record) -> ln.Feature:
             if feature.dtype_as_str != "str":
                 sys.exit(f"run index feature {feature.uid} is not a string")
             return feature
-    description = f"Run uid for {experiment.name}."
+    description = f"Run uid for {experiment_name}."
     feature = ln.Feature.filter(name=RUN_INDEX, description=description).one_or_none()
     if feature is None:
         feature = ln.Feature(name=RUN_INDEX, dtype=str, description=description).save()
     elif feature.dtype_as_str != "str":
         sys.exit(f"run index feature {feature.uid} is not a string")
     extra["run_index_feature_uid"] = feature.uid
-    experiment.extra_data = extra
-    experiment.save()
+    frame.extra_data = extra
+    frame.save()
     return feature
 
 
 def ensure_run_schema(
-    experiment: ln.Record, columns: dict[str, object]
+    frame: ln.Record, columns: dict[str, object]
 ) -> tuple[ln.Feature, dict[str, ln.Feature]]:
-    """Make the experiment a record frame whose columns are the experiment parameters."""
-    index = ensure_run_index(experiment)
+    """Make the runs frame a sheet whose columns are the experiment parameters."""
+    experiment_name = frame.type.name if frame.type is not None else frame.name
+    index = ensure_run_index(frame, experiment_name)
     features = {
         name: ensure_feature(name, feature_dtype(value))
         for name, value in columns.items()
     }
     features.update(run_metadata_features())
-    schema = experiment.schema
+    schema = frame.schema
     if schema is None:
         schema = ln.Schema(
             [feature.with_config(optional=True) for feature in features.values()],
             index=index,
-            name=f"{experiment.name} runs",
-            description=f"Config columns for {experiment.name} benchmark runs.",
+            name=f"{experiment_name} runs",
+            description=f"Config columns for {experiment_name} benchmark runs.",
         ).save()
-        if ln.Record.filter(schema=schema).exclude(pk=experiment.pk).exists():
+        if ln.Record.filter(schema=schema).exclude(pk=frame.pk).exists():
             sys.exit(f"schema {schema.uid} is already used by another record")
-        experiment.schema = schema
-        experiment.save()
+        frame.schema = schema
+        frame.save()
     else:
         if schema.index is None or schema.index.uid != index.uid:
-            sys.exit(f"{experiment.name} schema is not indexed by its run uid")
+            sys.exit(f"{frame.name} schema is not indexed by its run uid")
         members = list(schema.members.all())
         present = {feature.name for feature in members}
         missing = [feature for name, feature in features.items() if name not in present]
@@ -276,11 +277,11 @@ def ensure_run_schema(
             if feature.uid != index.uid and feature.name not in features
         ]
         if missing or extra:
-            if ln.Record.filter(schema=schema).exclude(pk=experiment.pk).exists():
+            if ln.Record.filter(schema=schema).exclude(pk=frame.pk).exists():
                 sys.exit(f"schema {schema.uid} is shared; refusing to change columns")
             if missing:
                 schema.add(missing)
-            _migrate_failed_column(experiment, members, features["succeeded"])
+            _migrate_failed_column(frame, members, features["succeeded"])
             if extra:
                 optional_uids = set(schema.optionals.get_uids())
                 stale_optional = [
@@ -289,7 +290,7 @@ def ensure_run_schema(
                 if stale_optional:
                     schema.optionals.remove(stale_optional)
                 schema.remove(extra)
-                _clear_feature_values(experiment, extra)
+                _clear_feature_values(frame, extra)
     return index, features
 
 
@@ -323,6 +324,106 @@ def _clear_feature_values(experiment: ln.Record, features: list[ln.Feature]) -> 
             record.features.remove_values(feature)
 
 
+def _set_description(record: ln.Record, description: str) -> ln.Record:
+    if record.description != description:
+        record.description = description
+        record.save()
+    return record
+
+
+def _detach_legacy_run_schema(experiment: ln.Record) -> None:
+    """Move a schema that still sits on the experiment page onto its runs frame.
+
+    Older layouts stored run rows directly on the experiment type. A page can
+    hold child types; a frame cannot, so the schema and rows move together.
+    """
+    if experiment.schema is None:
+        return
+    schema = experiment.schema
+    data_records = list(ln.Record.filter(type=experiment, is_type=False))
+    extra = dict(experiment.extra_data or {})
+    experiment.schema = None
+    experiment.save()
+    runs = ensure_type(RUNS_TYPE, type_record=experiment)
+    if runs.schema is not None and runs.schema.uid != schema.uid:
+        sys.exit(f"{runs.name} already has schema {runs.schema.uid}")
+    runs.schema = schema
+    runs_extra = dict(runs.extra_data or {})
+    stored = extra.get("run_index_feature_uid")
+    if isinstance(stored, str):
+        runs_extra["run_index_feature_uid"] = stored
+    runs.extra_data = runs_extra
+    runs.description = f"Benchmark runs of {experiment.name}."
+    runs.save()
+    for record in data_records:
+        record.type = runs
+        record.save()
+
+
+def ensure_runs_frame(experiment: ln.Record) -> ln.Record:
+    """The runs sheet under the experiment page."""
+    _detach_legacy_run_schema(experiment)
+    runs = ensure_type(RUNS_TYPE, type_record=experiment)
+    return _set_description(runs, f"Benchmark runs of {experiment.name}.")
+
+
+def ensure_analysis_index(frame: ln.Record, experiment_name: str) -> ln.Feature:
+    """A separate index so the analysis sheet does not share the runs schema."""
+    extra = dict(frame.extra_data or {})
+    stored = extra.get("analysis_index_feature_uid")
+    if isinstance(stored, str):
+        feature = ln.Feature.filter(uid=stored).one_or_none()
+        if feature is not None:
+            if feature.dtype_as_str != "str":
+                sys.exit(f"analysis index feature {feature.uid} is not a string")
+            return feature
+    description = f"Analysis run uid for {experiment_name}."
+    feature = ln.Feature.filter(
+        name=ANALYSIS_INDEX, description=description, is_type=False
+    ).one_or_none()
+    if feature is None:
+        if ln.Feature.filter(name=ANALYSIS_INDEX, is_type=False).exists():
+            sys.exit(f"feature {ANALYSIS_INDEX!r} exists with a different description")
+        feature = ln.Feature(
+            name=ANALYSIS_INDEX, dtype=str, description=description
+        ).save()
+    elif feature.dtype_as_str != "str":
+        sys.exit(f"analysis index feature {feature.uid} is not a string")
+    extra["analysis_index_feature_uid"] = feature.uid
+    frame.extra_data = extra
+    frame.save()
+    return feature
+
+
+def ensure_analysis_frame(experiment: ln.Record) -> ln.Record:
+    """A sheet, not a page: each analysis is one row that links its artifacts."""
+    frame = ensure_type(ANALYSIS_TYPE, type_record=experiment)
+    frame = _set_description(frame, f"Analyses of {experiment.name}.")
+    if frame.schema is not None:
+        return frame
+    index = ensure_analysis_index(frame, experiment.name)
+    metadata = run_metadata_features()
+    members = [metadata["started_at"], metadata["artifact"]]
+    schema = ln.Schema(
+        [feature.with_config(optional=True) for feature in members],
+        index=index,
+        name=f"{experiment.name} analysis",
+        description=f"Analysis records for {experiment.name}.",
+    ).save()
+    if ln.Record.filter(schema=schema).exclude(pk=frame.pk).exists():
+        sys.exit(f"schema {schema.uid} is already used by another record")
+    frame.schema = schema
+    frame.save()
+    return frame
+
+
+def require_child(experiment: ln.Record, name: str) -> ln.Record:
+    child = record_by_name(name, type_record=experiment)
+    if child is None:
+        sys.exit(f"{experiment.name} has no {name} record type")
+    return child
+
+
 def record_run(
     experiment: ln.Record,
     params: dict,
@@ -333,18 +434,20 @@ def record_run(
 ) -> ln.Record:
     """Create or update the data record for the active benchmark run.
 
-    The record's type is the experiment frame. Its reference is the Lamin run
-    URL. The sheet stores the config, the run start time, whether it succeeded,
-    and links to the measurement artifacts. Re-entering the same Lamin run
-    updates that record instead of adding another row.
+    The record's type is the runs frame under the experiment page. Its
+    reference is the Lamin run URL. The sheet stores the config, the run start
+    time, whether it succeeded, and links to the measurement artifacts.
+    Re-entering the same Lamin run updates that record instead of adding
+    another row.
     """
     run = ln.context.run
     if run is None:
         sys.exit("record_run requires an active ln.track() run")
     if run.started_at is None:
         sys.exit("benchmark run has no start time")
+    runs = ensure_runs_frame(experiment)
     columns = config_columns(params)
-    index, features = ensure_run_schema(experiment, columns)
+    index, features = ensure_run_schema(runs, columns)
     values = {
         index: run.uid,
         **{features[name]: value for name, value in columns.items()},
@@ -357,10 +460,10 @@ def record_run(
     if exit_code is not None:
         description = f"{description} Exit code {exit_code}."
     reference = f"https://lamin.ai/{instance}/run/{run.uid}"
-    record = ln.Record.filter(type=experiment, name=run.uid).one_or_none()
+    record = ln.Record.filter(type=runs, name=run.uid).one_or_none()
     if record is None:
         record = ln.Record(
-            type=experiment,
+            type=runs,
             description=description,
             reference=reference,
             reference_type="url",
@@ -378,9 +481,66 @@ def record_run(
         if changed:
             record.save()
         record.features.set_values(values)
-    if not experiment.input_of_runs.filter(pk=run.pk).exists():
-        experiment.input_of_runs.add(run)
+    if not runs.input_of_runs.filter(pk=run.pk).exists():
+        runs.input_of_runs.add(run)
     _link_run_artifacts(record, features["artifact"], artifacts)
+    return record
+
+
+def record_analysis(
+    experiment: ln.Record,
+    artifacts: list[ln.Artifact],
+    *,
+    instance: str,
+) -> ln.Record:
+    """Create or update the analysis row for the active run and link its artifacts."""
+    run = ln.context.run
+    if run is None:
+        sys.exit("record_analysis requires an active ln.track() run")
+    if run.started_at is None:
+        sys.exit("analysis run has no start time")
+    if not artifacts:
+        sys.exit("analysis record requires artifacts")
+    frame = ensure_analysis_frame(experiment)
+    if frame.schema is None or frame.schema.index is None:
+        sys.exit(f"{frame.name} has no indexed schema")
+    index = frame.schema.index
+    features = {feature.name: feature for feature in frame.schema.members.all()}
+    artifact_feature = features.get("artifact")
+    started_at = features.get("started_at")
+    if artifact_feature is None or started_at is None:
+        sys.exit(f"{frame.name} schema is missing started_at or artifact")
+    values = {
+        index: run.uid,
+        started_at: run.started_at,
+        artifact_feature: artifacts,
+    }
+    description = f"Analysis of {experiment.name}."
+    reference = f"https://lamin.ai/{instance}/run/{run.uid}"
+    record = ln.Record.filter(type=frame, name=run.uid).one_or_none()
+    if record is None:
+        record = ln.Record(
+            type=frame,
+            description=description,
+            reference=reference,
+            reference_type="url",
+            features=values,
+        ).save()
+    else:
+        changed = False
+        if record.description != description:
+            record.description = description
+            changed = True
+        if record.reference != reference or record.reference_type != "url":
+            record.reference = reference
+            record.reference_type = "url"
+            changed = True
+        if changed:
+            record.save()
+        record.features.set_values(values)
+    if not frame.input_of_runs.filter(pk=run.pk).exists():
+        frame.input_of_runs.add(run)
+    _link_run_artifacts(record, artifact_feature, artifacts)
     return record
 
 
@@ -419,7 +579,7 @@ def experiment_docs(folder: Path) -> tuple[str | None, str | None]:
 
 
 def sync_experiment(path: Path, params: dict | None = None) -> ln.Record:
-    """Update the experiment frame from the folder. Caller must be connected."""
+    """Update the experiment page and its runs and analysis frames."""
     parent = ensure_type(LOAD_BENCHMARKS)
     experiment = ensure_type(path.name, type_record=parent)
     description, notes = experiment_docs(path)
@@ -435,8 +595,10 @@ def sync_experiment(path: Path, params: dict | None = None) -> ln.Record:
     if changed:
         experiment.save()
     set_notes(experiment, notes)
+    runs = ensure_runs_frame(experiment)
+    ensure_analysis_frame(experiment)
     if params is not None:
-        ensure_run_schema(experiment, config_columns(params))
+        ensure_run_schema(runs, config_columns(params))
     return experiment
 
 
@@ -452,14 +614,19 @@ def main(argv: list[str] | None = None) -> None:
     try:
         record = sync_experiment(path, params)
         print(f"experiment: https://lamin.ai/{instance}/record/{record.uid}")
-        if record.schema is not None:
-            index_name = None if record.schema.index is None else record.schema.index.name
+        for name in (RUNS_TYPE, ANALYSIS_TYPE):
+            child = require_child(record, name)
+            kind = "frame" if child.schema is not None else "page"
+            print(f"{name}: https://lamin.ai/{instance}/record/{child.uid} ({kind})")
+            if child.schema is None:
+                continue
+            index_name = None if child.schema.index is None else child.schema.index.name
             columns = [
-                name
-                for name in record.schema.members.values_list("name", flat=True)
-                if name != index_name
+                column
+                for column in child.schema.members.values_list("name", flat=True)
+                if column != index_name
             ]
-            print(f"columns: {', '.join(columns)}")
+            print(f"{name} columns: {', '.join(columns)}")
     finally:
         ln.finish()
 
