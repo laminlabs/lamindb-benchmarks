@@ -1,9 +1,9 @@
 """Summarize feature-lookup latency for succeeded experiment_002 runs.
 
-The first repetition is the cold call and is kept out of the plotted lines.
-Warm repetitions are summarized as median and 95th percentile latency, by
-lookup and by number of intervention records. Uploads the table and an SVG
-figure, then stores an analysis record that links both.
+The first repetition is the cold call and is kept out of the plot.
+Warm repetitions are summarized as median latency, with the 5th and 95th
+percentiles as error bars. Uploads the table and an SVG figure, then stores
+an analysis record that links both.
 
 Usage:
   python experiments/experiment_002/analyze.py
@@ -55,7 +55,12 @@ Succeeded runs only. Each run times three lookups on the same sampled records: o
 
 ## How it is reported
 
-One table row per lookup and number of records. The cold call is the first repetition. The median and 95th percentile use only the warm repetitions. The plot draws those two warm statistics against the number of records, with a log scale on the x axis. A solid line is the median. A dashed line of the same color is the 95th percentile.
+One table row per lookup and number of records. The cold call is the first repetition. The median, 5th percentile, and 95th percentile use only the warm repetitions. The plot is an unconnected scatter of the warm median against the number of records, with a log scale on the x axis. Error bars span the 5th to the 95th percentile. Points are not joined.
+
+## Artifacts
+
+- `benchmarks/analysis/experiment_002/latency_median_p95.parquet`: the summary table. One row per lookup and record count.
+- `benchmarks/analysis/experiment_002/latency_median_p95.svg`: the scatter figure.
 """
 LABELS = {
     "uid_lookup": "lookup",
@@ -66,6 +71,11 @@ COLORS = {
     "uid_lookup": "#1f77b4",
     "uid_with_features": "#ff7f0e",
     "uid_batch_with_features": "#2ca02c",
+}
+SYMBOLS = {
+    "uid_lookup": "circle",
+    "uid_with_features": "square",
+    "uid_batch_with_features": "diamond",
 }
 
 
@@ -179,6 +189,7 @@ def summarize(samples: pd.DataFrame) -> pd.DataFrame:
                 "n_warm": int(len(warm)),
                 "latency_cold_ms": float(cold.median()) if not cold.empty else None,
                 "latency_median_ms": float(warm.median()),
+                "latency_p05_ms": float(warm.quantile(0.05)),
                 "latency_p95_ms": float(warm.quantile(0.95)),
             }
         )
@@ -188,35 +199,23 @@ def summarize(samples: pd.DataFrame) -> pd.DataFrame:
 
 
 def latency_figure(summary: pd.DataFrame) -> go.Figure:
-    """Median as a solid line and p95 as a dashed line, one color per lookup."""
+    """Unconnected median markers. Error bars span the warm 5th to 95th percentile."""
     figure = go.Figure()
     for query_name in summary["query_name"].drop_duplicates():
         stats = summary[summary["query_name"] == query_name]
         label = LABELS.get(query_name, query_name)
         color = COLORS.get(query_name, "#333333")
+        median = stats["latency_median_ms"]
         figure.add_trace(
             go.Scatter(
                 x=stats["n_rows"],
-                y=stats["latency_median_ms"],
-                mode="lines+markers",
-                name=f"{label} median",
-                line={"color": color, "width": 2},
-                marker={"size": 9},
+                y=median,
+                mode="markers",
+                name=label,
+                marker={"color": color, "size": 10, "symbol": SYMBOLS.get(query_name, "circle")},
+                error_y=_error_bar(median, stats["latency_p05_ms"], stats["latency_p95_ms"], color),
                 hovertemplate=(
                     "n_rows=%{x}<br>median=%{y:.3f} ms<extra>" + label + "</extra>"
-                ),
-            )
-        )
-        figure.add_trace(
-            go.Scatter(
-                x=stats["n_rows"],
-                y=stats["latency_p95_ms"],
-                mode="lines+markers",
-                name=f"{label} p95",
-                line={"color": color, "width": 2, "dash": "dash"},
-                marker={"size": 8, "symbol": "diamond"},
-                hovertemplate=(
-                    "n_rows=%{x}<br>p95=%{y:.3f} ms<extra>" + label + "</extra>"
                 ),
             )
         )
@@ -238,6 +237,23 @@ def latency_figure(summary: pd.DataFrame) -> go.Figure:
     return figure
 
 
+def _error_bar(
+    median: pd.Series, low: pd.Series, high: pd.Series, color: str
+) -> dict:
+    center = pd.to_numeric(median, errors="coerce")
+    below = (center - pd.to_numeric(low, errors="coerce")).clip(lower=0)
+    above = (pd.to_numeric(high, errors="coerce") - center).clip(lower=0)
+    return {
+        "type": "data",
+        "symmetric": False,
+        "array": above.tolist(),
+        "arrayminus": below.tolist(),
+        "color": color,
+        "thickness": 1.4,
+        "width": 6,
+    }
+
+
 def upload(
     summary: pd.DataFrame, figure: go.Figure, instance: str
 ) -> tuple[ln.Artifact, ln.Artifact]:
@@ -248,7 +264,10 @@ def upload(
     table = ln.Artifact.from_dataframe(
         summary,
         key=TABLE_KEY,
-        description=DESCRIPTION,
+        description=(
+            "Warm lookup latency by record count: cold call, median, "
+            "5th percentile, and 95th percentile."
+        ),
         features=features,
     ).save()
     with tempfile.TemporaryDirectory(prefix="benchmark-analysis-") as raw:
@@ -258,8 +277,8 @@ def upload(
             svg_path,
             key=PLOT_KEY,
             description=(
-                "SVG of warm median and 95th percentile lookup latency "
-                f"by number of intervention records for succeeded {NAME} runs."
+                "Unconnected scatter of warm median lookup latency. "
+                "Error bars span the 5th to the 95th percentile."
             ),
             features=features,
         ).save()

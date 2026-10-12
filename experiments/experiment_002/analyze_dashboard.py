@@ -52,6 +52,11 @@ COLORS = {
     "uid_with_features": "#ff7f0e",
     "uid_batch_with_features": "#2ca02c",
 }
+SYMBOLS = {
+    "uid_lookup": "circle",
+    "uid_with_features": "square",
+    "uid_batch_with_features": "diamond",
+}
 SCAN_COLOR = {
     "index": "#2ca02c",
     "seq": "#d62728",
@@ -73,11 +78,17 @@ Brings the scale measurements for this experiment into one view. Each point is t
 
 Succeeded runs only. Insert rate is the timed creation of the intervention records. Write events are entries in the database write log after the run. Auxiliary entries are rows in the record link and record JSON tables. Disk space and cache hit ratio are the load database's own figures at the end of the run, not a shared server total.
 
-Client latency is the warm median and 95th percentile of the three uid lookups. The first repetition is the cold call and is not plotted. Database execution time and scan type come from EXPLAIN ANALYZE, captured once after those timed calls because a later analysis cannot see a wiped database. A lookup is an index scan only when every explained record or link statement used an index and none used a sequential scan. Mixed means the plan used both.
+Client latency is the warm median of the three uid lookups. The first repetition is the cold call and is not plotted. Error bars span the warm 5th to 95th percentile. Database execution time and scan type come from EXPLAIN ANALYZE, captured once after those timed calls because a later analysis cannot see a wiped database. A lookup is an index scan only when every explained record or link statement used an index and none used a sequential scan. Mixed means the plan used both.
 
 ## How it is reported
 
-Eight panels, in archive order: write events and records, auxiliary-table entries, disk space, insert throughput, warm client latency, database execution time, scan type, and cache hit ratio. The x axis is the number of intervention records. A table of the same facts is stored beside the figure.
+Eight panels, in archive order: write events and records, auxiliary-table entries, disk space, insert throughput, warm client latency, database execution time, scan type, and cache hit ratio. The x axis is the number of intervention records. Every series is an unconnected scatter. The latency panel is the only one with error bars, because the other panels are one observation per record count.
+
+## Artifacts
+
+- `benchmarks/analysis/experiment_002/dashboard_snapshot.parquet`: one row per record count, with write events, auxiliary entries, disk, cache hit ratio, and insert rate.
+- `benchmarks/analysis/experiment_002/dashboard_queries.parquet`: one row per lookup and record count, with warm latency, database execution time, and scan type.
+- `benchmarks/analysis/experiment_002/dashboard.svg`: the eight-panel figure.
 """
 SNAPSHOT_KEY = f"benchmarks/analysis/{NAME}/dashboard_snapshot.parquet"
 QUERY_KEY = f"benchmarks/analysis/{NAME}/dashboard_queries.parquet"
@@ -178,12 +189,12 @@ def dashboard_figure(
     )
     _counts(figure, snapshot)
     _auxiliary(figure, storage)
-    _line(figure, snapshot, "disk_space_bytes", 1, 3, scale=1e-6, color="#9467bd")
-    _line(figure, snapshot, "insert_records_per_sec", 1, 4, color="#d62728")
+    _marker(figure, snapshot, "disk_space_bytes", 1, 3, scale=1e-6, color="#9467bd")
+    _marker(figure, snapshot, "insert_records_per_sec", 1, 4, color="#d62728")
     _latency(figure, queries)
     _execution(figure, queries)
     _scans(figure, queries)
-    _line(figure, snapshot, "cache_hit_ratio", 2, 4, color="#2ca02c")
+    _marker(figure, snapshot, "cache_hit_ratio", 2, 4, color="#2ca02c")
     figure.update_yaxes(type="log", row=1, col=1)
     figure.update_yaxes(range=[0, 1.02], row=2, col=4)
     figure.update_xaxes(title_text="records written")
@@ -217,7 +228,10 @@ def upload(
             ln.Artifact.from_dataframe(
                 snapshot,
                 key=SNAPSHOT_KEY,
-                description=DESCRIPTION,
+                description=(
+                    "One row per record count: write events, auxiliary entries, "
+                    "disk, cache hit ratio, and insert rate."
+                ),
                 features=features,
             ).save()
         )
@@ -226,7 +240,10 @@ def upload(
             ln.Artifact.from_dataframe(
                 queries,
                 key=QUERY_KEY,
-                description="Per-lookup latency, database execution time, and scan type.",
+                description=(
+                    "One row per lookup and record count: warm latency, "
+                    "database execution time, and scan type."
+                ),
                 features=features,
             ).save()
         )
@@ -237,7 +254,10 @@ def upload(
             ln.Artifact(
                 svg_path,
                 key=PLOT_KEY,
-                description="Eight-panel SVG dashboard of succeeded experiment_002 runs.",
+                description=(
+                    "Eight-panel scatter dashboard. Latency error bars span "
+                    "the warm 5th to 95th percentile."
+                ),
                 features=features,
             ).save()
         )
@@ -299,6 +319,7 @@ def _run_facts(record: ln.Record, feature: ln.Feature, n_rows: int) -> dict:
         if warm:
             series = pd.Series(warm)
             row["latency_median_ms"] = float(series.median())
+            row["latency_p05_ms"] = float(series.quantile(0.05))
             row["latency_p95_ms"] = float(series.quantile(0.95))
             row["n_warm"] = int(len(warm))
         if len(row) > 4:
@@ -344,9 +365,9 @@ def _counts(figure: go.Figure, snapshot: pd.DataFrame) -> None:
             go.Scatter(
                 x=ordered["n_rows"],
                 y=pd.to_numeric(ordered[column], errors="coerce"),
-                mode="lines+markers",
+                mode="markers",
                 name=name,
-                marker={"symbol": symbol},
+                marker={"symbol": symbol, "size": 9},
             ),
             row=1,
             col=1,
@@ -363,7 +384,8 @@ def _auxiliary(figure: go.Figure, storage: pd.DataFrame) -> None:
             go.Scatter(
                 x=ordered["n_rows"],
                 y=pd.to_numeric(ordered["table_rows"], errors="coerce"),
-                mode="lines+markers",
+                mode="markers",
+                marker={"size": 8},
                 name=str(table).removeprefix("lamindb_"),
             ),
             row=1,
@@ -380,29 +402,19 @@ def _latency(figure: go.Figure, queries: pd.DataFrame) -> None:
             continue
         label = LABELS[query_name]
         color = COLORS[query_name]
+        median = pd.to_numeric(group["latency_median_ms"], errors="coerce")
         figure.add_trace(
             go.Scatter(
                 x=group["n_rows"],
-                y=pd.to_numeric(group["latency_median_ms"], errors="coerce"),
-                mode="lines+markers",
-                name=f"{label} median",
-                line={"color": color},
+                y=median,
+                mode="markers",
+                name=label,
+                marker={"color": color, "size": 9, "symbol": SYMBOLS[query_name]},
+                error_y=_error_bar(group, color),
             ),
             row=2,
             col=1,
         )
-        if "latency_p95_ms" in group.columns:
-            figure.add_trace(
-                go.Scatter(
-                    x=group["n_rows"],
-                    y=pd.to_numeric(group["latency_p95_ms"], errors="coerce"),
-                    mode="lines+markers",
-                    name=f"{label} p95",
-                    line={"color": color, "dash": "dash"},
-                ),
-                row=2,
-                col=1,
-            )
 
 
 def _execution(figure: go.Figure, queries: pd.DataFrame) -> None:
@@ -416,9 +428,9 @@ def _execution(figure: go.Figure, queries: pd.DataFrame) -> None:
             go.Scatter(
                 x=group["n_rows"],
                 y=pd.to_numeric(group["execution_time_ms"], errors="coerce"),
-                mode="lines+markers",
+                mode="markers",
                 name=LABELS[query_name],
-                line={"color": COLORS[query_name]},
+                marker={"color": COLORS[query_name], "size": 9},
             ),
             row=2,
             col=2,
@@ -457,7 +469,7 @@ def _scans(figure: go.Figure, queries: pd.DataFrame) -> None:
         return
 
 
-def _line(
+def _marker(
     figure: go.Figure,
     snapshot: pd.DataFrame,
     column: str,
@@ -474,14 +486,31 @@ def _line(
         go.Scatter(
             x=ordered["n_rows"],
             y=pd.to_numeric(ordered[column], errors="coerce") * scale,
-            mode="lines+markers",
+            mode="markers",
             name=column,
-            line={"color": color},
+            marker={"color": color, "size": 9},
             showlegend=False,
         ),
         row=row,
         col=col,
     )
+
+
+def _error_bar(group: pd.DataFrame, color: str) -> dict | None:
+    if "latency_p05_ms" not in group.columns or "latency_p95_ms" not in group.columns:
+        return None
+    center = pd.to_numeric(group["latency_median_ms"], errors="coerce")
+    below = (center - pd.to_numeric(group["latency_p05_ms"], errors="coerce")).clip(lower=0)
+    above = (pd.to_numeric(group["latency_p95_ms"], errors="coerce") - center).clip(lower=0)
+    return {
+        "type": "data",
+        "symmetric": False,
+        "array": above.tolist(),
+        "arrayminus": below.tolist(),
+        "color": color,
+        "thickness": 1.4,
+        "width": 6,
+    }
 
 
 def _log_x(figure: go.Figure, steps: list[int], row: int, col: int) -> None:
