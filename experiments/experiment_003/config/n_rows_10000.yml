@@ -1,0 +1,3 @@
+experiment: experiments/experiment_003
+n_rows: 10000
+n_repetitions: 11
