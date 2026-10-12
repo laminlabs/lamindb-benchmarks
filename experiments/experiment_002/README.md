@@ -65,6 +65,24 @@ python experiments/experiment_002/analyze_dashboard.py
 - `benchmarks/analysis/experiment_002/dashboard_queries.parquet`: warm latency, database execution time, and scan type for each lookup.
 - `benchmarks/analysis/experiment_002/dashboard.svg`: the eight panels as unconnected markers. The latency panel uses the same error bars as the latency figure.
 
+Vertical boxplots of every timed repetition, one facet per query, with a shared categorical x axis:
+
+```
+python experiments/experiment_002/analyze_latency.py
+```
+
+- `benchmarks/analysis/experiment_002/latency_boxplot.parquet`: one row per timed repetition for the latest succeeded run at each record count.
+- `benchmarks/analysis/experiment_002/latency_boxplot.svg`: three vertical boxplot facets. The x axis categories are the record counts.
+
+Setup time, total rows, and database size as bar charts over those same categories:
+
+```
+python experiments/experiment_002/analyze_setup.py
+```
+
+- `benchmarks/analysis/experiment_002/setup_summary.parquet`: one row per record count, with setup time, insert rate, total rows, disk bytes, write events, and auxiliary entries.
+- `benchmarks/analysis/experiment_002/setup_summary.svg`: one bar-chart facet per fact, with a shared categorical x axis.
+
 ## Parameters
 
 - `n_rows`: How many intervention records to create before timing the lookups. Integer, at least 1.
