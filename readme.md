@@ -91,7 +91,7 @@ Both connect to `LAMIN_LOAD_INSTANCE`, or `laminlabs/lamindb-load-test` when tha
 
 Do not call `ln.track()` or `ln.finish()` on the load instance. Finish fails while that instance's Storage row is missing. The parent run on the benchmark instance is the tracked execution. The runner removes `LAMIN_INITIATED_BY_RUN_UID` from the child environment. Do not put it back.
 
-Only `reset.py` and the batch wipe the load instance. One call to `run_benchmark.py` does not. A wipe truncates user tables, including records, features, and schemas, and clears write events. Bionty tables, migrations, users, storage, runs, and transforms are kept. Recreate types, features, and catalogs in `setup.py` on every run. Do not assume rows from a smaller config are still there.
+Only `reset.py` and the batch wipe the load instance. One call to `run_benchmark.py` does not. A wipe truncates user tables, including records, features, and schemas, and clears write events. It does not drop indexes or extra tables. Bionty tables, migrations, users, storage, runs, and transforms are kept. Recreate types, features, and catalogs in `setup.py` on every run. Do not assume rows from a smaller config are still there. If the experiment creates an index or table, drop it before the process exits, including on failure. A leftover index on `lamindb_recordjson` would change later experiments.
 
 `setup.py` may write measurements too. The insert is the usual one. `query.py` runs only if setup exits 0. After both exit, the runner uploads every measurement in `BENCHMARK_RESULTS_DIR`, even when the exit code is non-zero. `succeeded` is true only for exit code 0.
 
