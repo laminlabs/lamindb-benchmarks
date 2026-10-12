@@ -1,13 +1,15 @@
-"""Reset the load instance and run every config in a folder.
+"""Wipe the load instance and run every config in a folder.
 
-Each config is its own benchmark run. The load instance is wiped before every
-run, including the first, so sizes do not accumulate. A failed benchmark does
-not stop the ladder; a failed reset does. This batch is tracked on the
-benchmark instance, and each run_benchmark.py inherits that run.
+Each config is a separate run_benchmark.py process. That process records its
+own run. This script does not call ln.track(). It clears
+LAMIN_INITIATED_BY_RUN_UID so the configs are not children of one parent run.
+The load instance is wiped before every config,
+including the first. A failed benchmark does not stop the ladder; a failed
+reset does.
 
 Usage:
   python benchmarks/batch_benchmarks.py --yes
-  python benchmarks/batch_benchmarks.py --yes configs
+  python benchmarks/batch_benchmarks.py --yes experiments/experiment_002/config
 """
 from __future__ import annotations
 
@@ -18,14 +20,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-_ROOT = Path(__file__).resolve().parents[1]
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
-
-import lamindb as ln
-
-from benchmarks.config import BENCHMARK_INSTANCE, BENCHMARK_INSTANCE_ENV, instance_from_env
-
 _HERE = Path(__file__).resolve().parent
 RESET_SCRIPT = _HERE / "reset.py"
 RUN_SCRIPT = _HERE / "run_benchmark.py"
@@ -33,7 +27,7 @@ RUN_SCRIPT = _HERE / "run_benchmark.py"
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Reset the load instance before each config in a folder."
+        description="Run each config in a folder as its own benchmark."
     )
     parser.add_argument(
         "folder",
@@ -93,33 +87,21 @@ def main(argv: list[str] | None = None) -> None:
             "refusing without --yes. Wipes the load instance before each config.\n"
             "  python benchmarks/batch_benchmarks.py --yes [folder]"
         )
-    folder = config_folder(args.folder)
-    files = config_files(folder)
-    instance = instance_from_env(BENCHMARK_INSTANCE_ENV, BENCHMARK_INSTANCE)
+    files = config_files(config_folder(args.folder))
+    env = os.environ.copy()
+    env.pop("LAMIN_INITIATED_BY_RUN_UID", None)
 
     failures: list[str] = []
-    ln.connect(instance)
-    ln.track(params={"configs": [path.name for path in files]})
-    try:
-        run = ln.context.run
-        if run is None:
-            sys.exit("batch_benchmarks requires an active ln.track() run")
-        # ln.track() reads this variable but does not export it. Set it so the
-        # reset and each benchmark run record this batch as initiated_by.
-        benchmark_env = os.environ.copy()
-        benchmark_env["LAMIN_INITIATED_BY_RUN_UID"] = run.uid
-        for path in files:
-            print(f"reset before {path.name}")
-            reset_code = _run(RESET_SCRIPT, ["--yes"], benchmark_env)
-            if reset_code != 0:
-                sys.exit(f"reset failed before {path.name} (exit {reset_code})")
-            print(f"run {path}")
-            run_code = _run(RUN_SCRIPT, [str(path)], benchmark_env)
-            if run_code != 0:
-                failures.append(f"{path.name} exit {run_code}")
-                print(f"[warn] {path.name} exited {run_code}; continuing")
-    finally:
-        ln.finish()
+    for path in files:
+        print(f"reset before {path.name}")
+        reset_code = _run(RESET_SCRIPT, ["--yes"], env)
+        if reset_code != 0:
+            sys.exit(f"reset failed before {path.name} (exit {reset_code})")
+        print(f"run {path}")
+        run_code = _run(RUN_SCRIPT, [str(path)], env)
+        if run_code != 0:
+            failures.append(f"{path.name} exit {run_code}")
+            print(f"[warn] {path.name} exited {run_code}; continuing")
     if failures:
         sys.exit("batch finished with failures: " + ", ".join(failures))
     print(f"batch complete: {len(files)} configs")

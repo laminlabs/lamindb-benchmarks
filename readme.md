@@ -81,7 +81,7 @@ Every other value becomes a column. Rules:
 - These keys are ignored as columns: `experiment`, `experiment_script`, `setup_script`, `instance`, `load_instance`, `failed`. Do not put instance names in the config.
 - Document every key in the experiment README, including its type, minimum, and default.
 
-A batch runs every `.yml` and `.yaml` in the folder you pass, after wiping the load instance. The default folder is `./configs`, which is experiment 001, not every experiment. Pass the experiment's own config folder. To run a subset, copy only those files into an empty folder. A leftover YAML in that folder will also run. Filenames sort with numbers in order, so `n_rows_10.yml` runs before `n_rows_100.yml`.
+A batch runs every `.yml` and `.yaml` in the folder you pass. It wipes the load instance, then starts `run_benchmark.py` for that file. The next config starts only after that process exits. The batch script is not tracked and does not set `LAMIN_INITIATED_BY_RUN_UID`. Each config is recorded by its own `run_benchmark.py` run. The default folder is `./configs`, which is experiment 001, not every experiment. Pass the experiment's own config folder. To run a subset, copy only those files into an empty folder. A leftover YAML in that folder will also run. Filenames sort with numbers in order, so `n_rows_10.yml` runs before `n_rows_100.yml`.
 
 A failed config does not stop the batch. A failed wipe does.
 
@@ -165,7 +165,7 @@ None of these name a particular experiment.
 
 - `benchmarks/experiment.py <folder>` syncs the page. It does not touch the load instance.
 - `benchmarks/run_benchmark.py [config]` tracks one config on the benchmark instance, then runs that folder's `setup.py` and `query.py` on the load instance.
-- `benchmarks/batch_benchmarks.py --yes [folder]` wipes the load instance, then runs every YAML file in that folder.
+- `benchmarks/batch_benchmarks.py --yes [folder]` wipes the load instance, then starts `run_benchmark.py` for every YAML file in that folder. It does not record a batch run.
 - `benchmarks/reset.py --yes` wipes the load instance. It refuses to run without `--yes`.
 
 `benchmarks/config.py`, `benchmarks/measurements.py`, and `benchmarks/timing.py` are imported by experiments. `benchmarks/setup.py` only creates plain records. An experiment does not have to use it.
