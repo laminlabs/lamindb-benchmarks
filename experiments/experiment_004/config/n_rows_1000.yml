@@ -1,0 +1,4 @@
+experiment: experiments/experiment_004
+n_rows: 1000
+n_values: 100
+n_repetitions: 11
