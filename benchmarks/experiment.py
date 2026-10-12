@@ -212,31 +212,65 @@ def run_metadata_features() -> dict[str, ln.Feature]:
     }
 
 
-def ensure_run_index(frame: ln.Record, experiment_name: str) -> ln.Feature:
-    """One index feature per experiment, so run sheets do not share a schema.
+def ensure_feature_type(name: str) -> ln.Feature:
+    matches = ln.Feature.filter(name=name, is_type=True).to_list()
+    if len(matches) > 1:
+        sys.exit(f"multiple feature types named {name!r}")
+    if matches:
+        return matches[0]
+    return ln.Feature(name=name, is_type=True).save()
 
-    Schema identity is the set of feature uids. A shared index would make two
-    experiments with the same config share one schema, and adding a column to
-    one would change the other.
+
+def ensure_private_index(
+    frame: ln.Record,
+    *,
+    experiment_name: str,
+    feature_name: str,
+    description: str,
+    extra_key: str,
+) -> ln.Feature:
+    """One index feature per experiment, so sheets with the same columns do not share a schema.
+
+    Feature identity is the name within a type. Creating another feature with the
+    same name and no type returns the existing one and overwrites its description.
+    The type keeps this experiment's index from colliding with another experiment.
     """
     extra = dict(frame.extra_data or {})
-    stored = extra.get("run_index_feature_uid")
+    stored = extra.get(extra_key)
     if isinstance(stored, str):
         feature = ln.Feature.filter(uid=stored).one_or_none()
-        if feature is not None:
+        if feature is not None and feature.description == description:
             if feature.dtype_as_str != "str":
-                sys.exit(f"run index feature {feature.uid} is not a string")
+                sys.exit(f"index feature {feature.uid} is not a string")
             return feature
-    description = f"Run uid for {experiment_name}."
-    feature = ln.Feature.filter(name=RUN_INDEX, description=description).one_or_none()
+    feature_type = ensure_feature_type(f"{experiment_name} indexes")
+    feature = ln.Feature.filter(
+        name=feature_name, type=feature_type, is_type=False
+    ).one_or_none()
     if feature is None:
-        feature = ln.Feature(name=RUN_INDEX, dtype=str, description=description).save()
+        feature = ln.Feature(
+            name=feature_name,
+            dtype=str,
+            description=description,
+            type=feature_type,
+        ).save()
     elif feature.dtype_as_str != "str":
-        sys.exit(f"run index feature {feature.uid} is not a string")
-    extra["run_index_feature_uid"] = feature.uid
+        sys.exit(f"index feature {feature.uid} is not a string")
+    extra[extra_key] = feature.uid
     frame.extra_data = extra
     frame.save()
     return feature
+
+
+def ensure_run_index(frame: ln.Record, experiment_name: str) -> ln.Feature:
+    """One index feature per experiment, so run sheets do not share a schema."""
+    return ensure_private_index(
+        frame,
+        experiment_name=experiment_name,
+        feature_name=RUN_INDEX,
+        description=f"Run uid for {experiment_name}.",
+        extra_key="run_index_feature_uid",
+    )
 
 
 def ensure_run_schema(
@@ -365,31 +399,14 @@ def ensure_runs_frame(experiment: ln.Record) -> ln.Record:
 
 
 def ensure_analysis_index(frame: ln.Record, experiment_name: str) -> ln.Feature:
-    """A separate index so the analysis sheet does not share the runs schema."""
-    extra = dict(frame.extra_data or {})
-    stored = extra.get("analysis_index_feature_uid")
-    if isinstance(stored, str):
-        feature = ln.Feature.filter(uid=stored).one_or_none()
-        if feature is not None:
-            if feature.dtype_as_str != "str":
-                sys.exit(f"analysis index feature {feature.uid} is not a string")
-            return feature
-    description = f"Analysis run uid for {experiment_name}."
-    feature = ln.Feature.filter(
-        name=ANALYSIS_INDEX, description=description, is_type=False
-    ).one_or_none()
-    if feature is None:
-        if ln.Feature.filter(name=ANALYSIS_INDEX, is_type=False).exists():
-            sys.exit(f"feature {ANALYSIS_INDEX!r} exists with a different description")
-        feature = ln.Feature(
-            name=ANALYSIS_INDEX, dtype=str, description=description
-        ).save()
-    elif feature.dtype_as_str != "str":
-        sys.exit(f"analysis index feature {feature.uid} is not a string")
-    extra["analysis_index_feature_uid"] = feature.uid
-    frame.extra_data = extra
-    frame.save()
-    return feature
+    """A separate index so the analysis sheet does not share another experiment's schema."""
+    return ensure_private_index(
+        frame,
+        experiment_name=experiment_name,
+        feature_name=ANALYSIS_INDEX,
+        description=f"Analysis run uid for {experiment_name}.",
+        extra_key="analysis_index_feature_uid",
+    )
 
 
 def ensure_analysis_frame(experiment: ln.Record) -> ln.Record:
