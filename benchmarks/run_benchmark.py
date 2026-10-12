@@ -56,10 +56,10 @@ def _ensure_feature(name: str, dtype: str) -> ln.Feature:
 
 
 def measurement_artifact_key(key: str, experiment: Path, run_uid: str) -> str:
-    """Insert the benchmark run uid after the experiment name.
+    """Insert the benchmark run uid after the experiment folder name.
 
-    benchmarks/measurements/experiment_001/record_count.parquet becomes
-    benchmarks/measurements/experiment_001/<run_uid>/record_count.parquet.
+    benchmarks/measurements/<experiment>/<query>.parquet becomes
+    benchmarks/measurements/<experiment>/<run_uid>/<query>.parquet.
     """
     if not run_uid or run_uid in {".", ".."} or "/" in run_uid or "\\" in run_uid:
         sys.exit(f"invalid run uid for artifact key: {run_uid!r}")
