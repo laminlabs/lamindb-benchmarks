@@ -34,7 +34,7 @@ NAME = Path(__file__).resolve().parent.name
 LATENCY = "latency_ms"
 VALUE = "value"
 TABLE_KEY = f"benchmarks/analysis/{NAME}/count_match_by_n_rows.parquet"
-PLOT_KEY = f"benchmarks/analysis/{NAME}/count_match_by_n_rows.html"
+PLOT_KEY = f"benchmarks/analysis/{NAME}/count_match_by_n_rows.svg"
 TITLE = "Counted records match created records"
 DESCRIPTION = (
     "Checks that each timed count returns the number of records created, "
@@ -213,10 +213,10 @@ def upload(
         features=features,
     ).save()
     with tempfile.TemporaryDirectory(prefix="benchmark-analysis-") as raw:
-        html_path = Path(raw) / "count_match_by_n_rows.html"
-        figure.write_html(html_path, include_plotlyjs=True, full_html=True)
+        svg_path = Path(raw) / "count_match_by_n_rows.svg"
+        figure.write_image(svg_path, format="svg")
         plot = ln.Artifact(
-            html_path,
+            svg_path,
             key=PLOT_KEY,
             description=f"Minimum and maximum count latency by n_rows for {NAME}.",
             features=features,

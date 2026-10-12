@@ -2,7 +2,7 @@
 
 Reads run records whose succeeded flag is true, loads their measurement
 artifacts, and summarizes latency by number of rows. Uploads the summary
-table and a plotly figure, then stores an analysis record that links both.
+table and an SVG figure, then stores an analysis record that links both.
 
 Usage:
   python experiments/experiment_001/analyze.py
@@ -37,7 +37,7 @@ from benchmarks.experiment import (
 NAME = Path(__file__).resolve().parent.name
 LATENCY = "latency_ms"
 TABLE_KEY = f"benchmarks/analysis/{NAME}/latency_by_n_rows.parquet"
-PLOT_KEY = f"benchmarks/analysis/{NAME}/latency_by_n_rows.html"
+PLOT_KEY = f"benchmarks/analysis/{NAME}/latency_by_n_rows.svg"
 MEAN_COLOR = "#1f77b4"
 MEDIAN_COLOR = "#ff7f0e"
 POINT_COLOR = "#9aa0a6"
@@ -230,13 +230,13 @@ def upload(
         features=features,
     ).save()
     with tempfile.TemporaryDirectory(prefix="benchmark-analysis-") as raw:
-        html_path = Path(raw) / "latency_by_n_rows.html"
-        figure.write_html(html_path, include_plotlyjs=True, full_html=True)
+        svg_path = Path(raw) / "latency_by_n_rows.svg"
+        figure.write_image(svg_path, format="svg")
         plot = ln.Artifact(
-            html_path,
+            svg_path,
             key=PLOT_KEY,
             description=(
-                f"Plotly chart of mean, median, and standard deviation of {LATENCY} "
+                f"SVG of mean, median, and standard deviation of {LATENCY} "
                 f"by n_rows for succeeded {NAME} runs."
             ),
             features=features,
