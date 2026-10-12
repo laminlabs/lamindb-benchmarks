@@ -1,0 +1,260 @@
+"""Read-only load-instance facts for the dashboard.
+
+Imported by setup and query. Not a standalone script: the load database is
+wiped between configs, so these facts have to be captured during the run.
+"""
+from __future__ import annotations
+
+import json
+import re
+from collections.abc import Callable
+
+import lamindb as ln
+
+LINK_TABLES = {"lamindb_recordulabel", "lamindb_recordrecord"}
+DATA_TABLES = {"lamindb_recordjson"}
+EVENTS_TABLE = "hubmodule_dbwrite"
+RECORD_TABLES = (
+    "lamindb_record",
+    "lamindb_recordjson",
+    "lamindb_recordrecord",
+    "lamindb_recordulabel",
+)
+_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+PLAN_LIMIT = 1000
+
+
+def table_kind(name: str) -> str:
+    if name in LINK_TABLES or (
+        name.startswith("lamindb_record") and name not in {"lamindb_record", *DATA_TABLES}
+    ):
+        return "link"
+    if name in DATA_TABLES:
+        return "data"
+    return "base"
+
+
+def count_rows(table: str) -> int | None:
+    try:
+        with _cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) FROM {_quote(table)}")
+            return int(cur.fetchone()[0])
+    except Exception:
+        return None
+
+
+def database_facts() -> dict:
+    """Exact row counts for record-related tables, plus server health."""
+    tables = _distribution()
+    health = _server_health()
+    n_events = next(
+        (row["table_rows"] for row in tables if row["table_name"] == EVENTS_TABLE),
+        0,
+    )
+    auxiliary = [row for row in tables if row["table_kind"] in {"link", "data"}]
+    return {
+        "distribution": tables,
+        "n_events": int(n_events),
+        "n_auxiliary_entries": int(sum(row["table_rows"] for row in auxiliary)),
+        "n_total_rows": int(sum(row["table_rows"] for row in tables)),
+        **health,
+    }
+
+
+def explain_lookup(query_name: str, uids: list[str], replay: Callable[[], object]) -> dict:
+    """EXPLAIN ANALYZE the statements that read record and link tables.
+
+    The replay is the same lookup that was timed, run once more outside the
+    timer. If its statements cannot be captured, the record filter alone is
+    explained, which is the plan the archived benchmark recorded.
+    """
+    statements = _record_selects(replay)
+    plans = [plan for sql in statements if (plan := _explain_sql(sql)) is not None]
+    source = "lookup"
+    if not plans:
+        fallback = _explain_queryset(query_name, uids)
+        plans = [fallback] if fallback is not None else []
+        source = "record_filter"
+    return _aggregate(plans, source)
+
+
+def _distribution() -> list[dict]:
+    sql = """
+    SELECT c.relname,
+           pg_relation_size(c.oid),
+           pg_indexes_size(c.oid),
+           pg_total_relation_size(c.oid),
+           COALESCE(s.n_dead_tup, 0),
+           COALESCE(s.n_live_tup, 0)
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
+    WHERE c.relkind = 'r'
+      AND n.nspname = 'public'
+      AND (c.relname LIKE %s OR c.relname = %s)
+    ORDER BY c.relname
+    """
+    rows = []
+    with _cursor() as cur:
+        cur.execute(sql, ("lamindb_record%", EVENTS_TABLE))
+        fetched = cur.fetchall()
+        for name, data_b, idx_b, total_b, dead, live in fetched:
+            cur.execute(f"SELECT COUNT(*) FROM {_quote(name)}")
+            live_n = int(live or 0)
+            rows.append(
+                {
+                    "table_name": name,
+                    "table_kind": table_kind(name),
+                    "table_rows": int(cur.fetchone()[0]),
+                    "data_size_bytes": int(data_b or 0),
+                    "index_size_bytes": int(idx_b or 0),
+                    "total_size_bytes": int(total_b or 0),
+                    "bloat_ratio": (float(dead) / live_n) if live_n else 0.0,
+                }
+            )
+    return rows
+
+
+def _server_health() -> dict:
+    probes = {
+        "disk_space_bytes": "SELECT pg_database_size(current_database())",
+        "active_connections": (
+            "SELECT count(*) FROM pg_stat_activity "
+            "WHERE datname = current_database() AND state = 'active'"
+        ),
+        "cache_hit_ratio": """
+            SELECT sum(blks_hit)::float8
+                   / NULLIF(sum(blks_hit) + sum(blks_read), 0)
+            FROM pg_stat_database
+            WHERE datname = current_database()
+        """,
+    }
+    health: dict = {}
+    with _cursor() as cur:
+        for key, statement in probes.items():
+            cur.execute(statement)
+            value = cur.fetchone()[0]
+            if value is None:
+                continue
+            health[key] = float(value) if key == "cache_hit_ratio" else int(value)
+    return health
+
+
+def _record_selects(replay: Callable[[], object]) -> list[str]:
+    from django.conf import settings
+    from django.db import connections, reset_queries
+
+    alias = ln.Record.objects.db
+    previous = settings.DEBUG
+    settings.DEBUG = True
+    reset_queries()
+    try:
+        replay()
+        logged = list(connections[alias].queries)
+    except Exception:
+        return []
+    finally:
+        settings.DEBUG = previous
+    statements = []
+    for item in logged:
+        statements.extend(_select_statements(str(item.get("sql", ""))))
+    return statements
+
+
+def _select_statements(sql: str) -> list[str]:
+    """Split a logged query into the SELECTs that read record tables.
+
+    Django logs the RLS `set_token` call in the same string as the lookup.
+    Explaining that compound string only plans the token call, which is a
+    constant Result and hides whether the lookup used an index.
+    """
+    statements = []
+    for part in sql.split(";"):
+        statement = part.strip()
+        head = statement[:16].upper()
+        if not head.startswith("SELECT") or head.startswith("SELECT SET_TOKEN"):
+            continue
+        if any(table in statement for table in RECORD_TABLES):
+            statements.append(statement)
+    return statements
+
+
+def _explain_sql(sql: str) -> dict | None:
+    statement = sql.strip().rstrip(";").replace("%", "%%")
+    try:
+        with _cursor() as cur:
+            cur.execute(f"EXPLAIN (ANALYZE, FORMAT JSON) {statement}")
+            raw = cur.fetchone()[0]
+    except Exception:
+        return None
+    return _plan_root(raw)
+
+
+def _explain_queryset(query_name: str, uids: list[str]) -> dict | None:
+    if not uids:
+        return None
+    query = (
+        ln.Record.filter(uid__in=uids)
+        if query_name == "uid_batch_with_features"
+        else ln.Record.filter(uid=uids[0])
+    )
+    try:
+        raw = query.explain(analyze=True, format="json")
+    except Exception:
+        return None
+    return _plan_root(raw)
+
+
+def _plan_root(raw: object) -> dict | None:
+    if isinstance(raw, bytes | memoryview):
+        raw = bytes(raw).decode()
+    try:
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+    except (json.JSONDecodeError, TypeError):
+        return None
+    node = payload[0] if isinstance(payload, list) else payload
+    return node if isinstance(node, dict) else None
+
+
+def _aggregate(plans: list[dict], source: str) -> dict:
+    text = json.dumps(plans)
+    execution = [
+        float(plan["Execution Time"])
+        for plan in plans
+        if _is_number(plan.get("Execution Time"))
+    ]
+    planning = [
+        float(plan["Planning Time"])
+        for plan in plans
+        if _is_number(plan.get("Planning Time"))
+    ]
+    return {
+        "execution_time_ms": round(sum(execution), 3) if execution else None,
+        "planning_time_ms": round(sum(planning), 3) if planning else None,
+        "used_index": "Index Scan" in text or "Index Only Scan" in text,
+        "used_seq_scan": "Seq Scan" in text,
+        "n_statements": len(plans),
+        "plan_source": source,
+        "query_plan": text[:PLAN_LIMIT],
+    }
+
+
+def _cursor():
+    """Use LaminDB's connection so RLS `set_token` is applied.
+
+    A fresh psycopg connection has no JWT, and row counts on the load
+    instance then fail inside `check_access()`.
+    """
+    from django.db import connections
+
+    return connections[ln.Record.objects.db].cursor()
+
+
+def _quote(name: str) -> str:
+    if not _IDENT.fullmatch(name):
+        raise ValueError(f"unexpected table name: {name!r}")
+    return f'"{name}"'
+
+
+def _is_number(value: object) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
