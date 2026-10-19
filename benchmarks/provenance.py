@@ -20,7 +20,7 @@ def _git(directory: Path, *args: str, optional: bool = False) -> str:
         if optional:
             return ""
         raise RuntimeError(f"Cannot read Git {args[0]} in {directory}")
-    return result.stdout.strip()
+    return result.stdout.rstrip("\n")
 
 
 def repository_url(remote: str) -> str:
@@ -75,7 +75,7 @@ def editable_dependencies() -> dict:
 
 
 def benchmark_provenance(root: Path, experiment: Path, config: Path) -> dict:
-    """Reject uncommitted benchmark inputs rather than link to different code."""
+    """Link to HEAD and record local changes without requiring a commit or push."""
     root = root.resolve()
     try:
         experiment_path = experiment.resolve().relative_to(root).as_posix()
@@ -84,23 +84,16 @@ def benchmark_provenance(root: Path, experiment: Path, config: Path) -> dict:
         raise ValueError("The experiment and config must be inside the Git repository") from error
     for required in ("benchmarks/run_benchmark.py", f"{experiment_path}/setup.py",
                      f"{experiment_path}/query.py", config_path, "pyproject.toml", "uv.lock"):
-        _git(root, "ls-files", "--error-unmatch", "--", required)
-    paths = ["benchmarks", experiment_path, config_path, "pyproject.toml", "uv.lock"]
-    revision = git_revision(root, paths=paths)
-    if revision["dirty"]:
-        raise ValueError(
-            "Commit the benchmark code, experiment folder, config, and dependency files "
-            "before running, so the Git link identifies the code being executed.\n"
-            + "\n".join(revision["changes"])
-        )
+        if not (root / required).is_file():
+            raise ValueError(f"Required benchmark file is missing: {required}")
+    revision = git_revision(root)
     published = _git(root, "for-each-ref", "--format=%(refname)",
                      "--contains", revision["commit"], "refs/remotes/origin")
-    if not published:
-        raise ValueError("Push the benchmark commit to origin before running (fetch origin if needed).")
     base = revision["repository"]
     blob = f"{base}/blob/{revision['commit']}"
     dependencies = editable_dependencies()
     revision.update({
+        "published": bool(published),
         "experiment_path": experiment_path,
         "experiment_url": f"{revision['url']}/{quote(experiment_path, safe='/')}",
         "config_path": config_path,

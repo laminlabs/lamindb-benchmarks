@@ -170,6 +170,12 @@ def main(argv: list[str] | None = None) -> None:
         run.save(update_fields=["name"])
         attach_git_provenance(run, provenance)
         print(f"Git revision: {run.reference}")
+        if provenance["dirty"]:
+            print("[warn] benchmark checkout is dirty; the Git link shows the committed "
+                  "baseline. Changed files are recorded in run.extra_data['git']['changes'].")
+        if not provenance["published"]:
+            print("[warn] benchmark commit is not known to be published on origin; "
+                  "its Git link may be unavailable until pushed.")
         if not provenance["editable_dependencies_clean"]:
             print("[warn] editable Lamin packages have local changes; their Git references "
                   "do not include those changes (see run.extra_data['git']).")
