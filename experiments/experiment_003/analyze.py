@@ -32,6 +32,7 @@ from benchmarks.experiment import (
     record_analysis,
     record_by_name,
     require_child,
+    run_uid_of,
 )
 
 NAME = Path(__file__).resolve().parent.name
@@ -99,13 +100,13 @@ def experiment_record() -> ln.Record:
 
 def load_samples(runs: ln.Record) -> pd.DataFrame:
     feature = _artifact_feature(runs)
-    selected = {record.name: n_rows for record, _values, n_rows in latest_runs(runs)}
+    selected = {record.uid: n_rows for record, _values, n_rows in latest_runs(runs)}
     spills = _spills(runs, feature, selected)
     rows: list[dict] = []
     for record in ln.Record.filter(type=runs, is_type=False):
-        if record.name not in selected:
+        if record.uid not in selected:
             continue
-        n_rows = selected[record.name]
+        n_rows = selected[record.uid]
         print(f"using {record.name} for {n_rows} records")
         for artifact in measurements(record, feature):
             values = artifact.features.get_values()
@@ -126,7 +127,7 @@ def load_samples(runs: ln.Record) -> pd.DataFrame:
                     continue
                 rows.append(
                     {
-                        "run_uid": record.name,
+                        "run_uid": run_uid_of(record),
                         "query_name": QUERY_NAME,
                         "n_rows": n_rows,
                         REPETITION: int(repetition),
@@ -227,14 +228,14 @@ def _spills(
 ) -> dict[int, bool]:
     found: dict[int, bool] = {}
     for record in ln.Record.filter(type=runs, is_type=False):
-        if record.name not in selected:
+        if record.uid not in selected:
             continue
         for artifact in measurements(record, feature):
             values = artifact.features.get_values()
             if values.get("query_name") != f"explain_{QUERY_NAME}":
                 continue
             if "spilled_to_disk" in values:
-                found[selected[record.name]] = bool(values["spilled_to_disk"])
+                found[selected[record.uid]] = bool(values["spilled_to_disk"])
     return found
 
 

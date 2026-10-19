@@ -33,6 +33,7 @@ from benchmarks.experiment import (
     record_analysis,
     record_by_name,
     require_child,
+    run_uid_of,
 )
 
 NAME = Path(__file__).resolve().parent.name
@@ -155,7 +156,7 @@ def load_samples(runs: ln.Record) -> pd.DataFrame:
                     continue
                 rows.append(
                     {
-                        "run_uid": record.name,
+                        "run_uid": run_uid_of(record),
                         "query_name": query_name,
                         "n_rows": n_rows,
                         "n_uids": n_uids,

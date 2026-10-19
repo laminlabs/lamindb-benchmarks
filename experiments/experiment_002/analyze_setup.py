@@ -34,6 +34,7 @@ from benchmarks.experiment import (
     record_analysis,
     record_by_name,
     require_child,
+    run_uid_of,
 )
 
 NAME = Path(__file__).resolve().parent.name
@@ -120,7 +121,7 @@ def load_summary(runs: ln.Record) -> pd.DataFrame:
         if "insert_seconds" not in facts and "n_total_rows" not in facts:
             print(f"[warn] {record.name} has no setup facts")
             continue
-        rows.append({"run_uid": record.name, "n_rows": n_rows, **facts})
+        rows.append({"run_uid": run_uid_of(record), "n_rows": n_rows, **facts})
     if not rows:
         sys.exit(f"succeeded {NAME} runs have no setup measurements")
     return pd.DataFrame(rows).sort_values("n_rows")

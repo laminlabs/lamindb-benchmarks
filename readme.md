@@ -65,6 +65,7 @@ That command does not touch the load instance. It still reads `./config.yml`, or
 ## Config
 
 ```yaml
+name: "My experiment: 10 records"
 experiment: experiments/my_experiment
 n_rows: 10
 n_repetitions: 3
@@ -72,18 +73,30 @@ n_repetitions: 3
 
 `experiment` is a folder path, resolved from the working directory, not from the YAML file's directory. It is not a run-sheet column.
 
+`name` is the display name of both the Lamin run and its run record. It must be a non-empty string of at most 150 characters. Older configs without it fall back to the run uid. Repeated executions may share a display name; their run uids and run records remain distinct. The run sheet uses `name` as its display index and stores the execution uid separately in `run_uid`. The record explicitly links both its run and the run's transform, so they appear as attachments. Existing run-uid indexes are migrated without discarding the old uid values.
+
 Every other value becomes a column. Rules:
 
 - Values are scalars: `bool`, `int`, `float`, or `str`. No lists, no nested mappings, no nulls. A null key is skipped.
 - Keep the Python type of a key stable across every config of that experiment. The first run fixes the column dtype.
 - At least one scalar column is required.
 - Do not use reserved keys: `run_uid`, `started_at`, `succeeded`, `artifact`.
-- These keys are ignored as columns: `experiment`, `experiment_script`, `setup_script`, `instance`, `load_instance`, `failed`. Do not put instance names in the config.
+- These keys are ignored as parameter columns: `name`, `experiment`, `experiment_script`, `setup_script`, `instance`, `load_instance`, `failed`. Do not put instance names in the config.
 - Document every key in the experiment README, including its type, minimum, and default.
 
 A batch runs every `.yml` and `.yaml` in the folder you pass. It wipes the load instance, then starts `run_benchmark.py` for that file. The next config starts only after that process exits. The batch script is not tracked and does not set `LAMIN_INITIATED_BY_RUN_UID`. Each config is recorded by its own `run_benchmark.py` run. The default folder is `./configs`, which is experiment 001, not every experiment. Pass the experiment's own config folder. To run a subset, copy only those files into an empty folder. A leftover YAML in that folder will also run. Filenames sort with numbers in order, so `n_rows_10.yml` runs before `n_rows_100.yml`.
 
 A failed config does not stop the batch. A failed wipe does.
+
+## Transform keys and Git references
+
+The runner uses `benchmarks/experiments/<experiment folder name>` as its transform key, for example `benchmarks/experiments/experiment_002`. Each experiment has its own transform family even though they execute the same runner script. Config names label runs and result records; changing the record count does not change the transform key.
+
+Before starting, the runner checks that its code, the experiment folder, selected config, `pyproject.toml`, and `uv.lock` are committed, and that the commit is present in an `origin` remote-tracking branch. Commit and push changes before running; fetch origin if the local remote-tracking refs are stale. The selected config must be tracked inside this repository. These checks happen before setup or query writes to the load instance.
+
+Each run's `reference` is the repository URL pinned to its full commit SHA. Its transform's `reference` links to `benchmarks/run_benchmark.py` at that commit. `run.extra_data["git"]` stores the repository, commit, branch, config and experiment URLs, plus the versions, Git commits, and dirty status of the six editable Lamin dependencies. SSH origins are converted to browser URLs without including credentials. A dirty editable dependency is flagged in the run log and metadata: its local edits are not contained in its Git link and must be committed to reproduce that package exactly.
+
+Git references describe the checkout used when a new run starts. They do not use a moving branch URL.
 
 ## Setup and query
 
@@ -138,7 +151,7 @@ Analysis that plots latency must ignore files whose kind is not `lookup`.
 
 An analysis script connects to the benchmark instance, calls `ln.track()` and `ln.finish()`, and reads artifacts from LaminDB. Do not read the local parquet the runner already uploaded.
 
-Find the experiment with `record_by_name` under `LOAD_BENCHMARKS`, then its `runs` child with `require_child`. Keep rows whose `succeeded` feature is true. Load artifacts through the run's `artifact` feature. For a size ladder, use the latest succeeded run at each `n_rows`, because each config started from an empty database. Say so in the notes. Pooling every historical run mixes different repetition counts.
+Find the experiment with `record_by_name` under `LOAD_BENCHMARKS`, then its `runs` child with `require_child`. Keep rows whose `succeeded` feature is true. Load artifacts through the run's `artifact` feature. For a size ladder, use the latest succeeded run at each `n_rows`, because each config started from an empty database. Say so in the notes. Pooling every historical run mixes different repetition counts. Use `record.uid` when selecting records and `run_uid_of(record)` for an output table's `run_uid`; display names can repeat.
 
 Upload a table and an SVG plot. Then:
 

@@ -14,6 +14,14 @@ LOAD_INSTANCE_ENV = "LAMIN_LOAD_INSTANCE"
 CONFIG_ENV = "BENCHMARK_CONFIG"
 
 
+def run_name(params: dict, *, default: str) -> str:
+    """A display name; execution identity always remains the Lamin run uid."""
+    value = params.get("name", default)
+    if not isinstance(value, str) or not value.strip() or len(value.strip()) > 150:
+        sys.exit("name must be a non-empty string of at most 150 characters")
+    return value.strip()
+
+
 def read_config(path: Path | str | None = None) -> dict:
     """Load a config file.
 

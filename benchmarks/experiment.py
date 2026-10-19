@@ -27,12 +27,14 @@ from benchmarks.config import (
     BENCHMARK_INSTANCE_ENV,
     instance_from_env,
     read_config,
+    run_name,
 )
 
 LOAD_BENCHMARKS = "Load Benchmarks"
 RUNS_TYPE = "runs"
 ANALYSIS_TYPE = "analysis"
-RUN_INDEX = "run_uid"
+RUN_INDEX = "name"
+RUN_UID = "run_uid"
 ANALYSIS_INDEX = "analysis_uid"
 README = "README.md"
 SETUP_SCRIPT = "setup.py"
@@ -56,6 +58,7 @@ RUN_FEATURES = (
 # Runner metadata, not experiment parameters. Kept out of the run sheet even
 # if an older config still contains them.
 EXCLUDED_COLUMN_KEYS = {
+    "name",
     "experiment",
     "experiment_script",
     "setup_script",
@@ -63,7 +66,7 @@ EXCLUDED_COLUMN_KEYS = {
     "load_instance",
     "failed",
 }
-RESERVED_CONFIG_KEYS = {RUN_INDEX, *(name for name, *_rest in RUN_FEATURES)}
+RESERVED_CONFIG_KEYS = {RUN_UID, *(name for name, *_rest in RUN_FEATURES)}
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -156,6 +159,7 @@ def feature_dtype(value: object) -> str:
 
 def config_columns(params: dict) -> dict[str, object]:
     """Scalar experiment parameters that become columns on each run record."""
+    run_name(params, default="unnamed")
     columns = {}
     for key, value in params.items():
         if not isinstance(key, str) or not key.strip():
@@ -268,9 +272,52 @@ def ensure_run_index(frame: ln.Record, experiment_name: str) -> ln.Feature:
         frame,
         experiment_name=experiment_name,
         feature_name=RUN_INDEX,
-        description=f"Run uid for {experiment_name}.",
-        extra_key="run_index_feature_uid",
+        description=f"Run name for {experiment_name}.",
+        extra_key="run_name_feature_uid",
     )
+
+
+def run_uid_of(record: ln.Record) -> str:
+    """Resolve execution identity independently of the record's display name."""
+    if record.run_id is not None:
+        return record.run.uid
+    value = record.features.get_values().get(RUN_UID)
+    if isinstance(value, str) and value:
+        return value
+    sys.exit(f"benchmark record {record.uid} has no run uid")
+
+
+def _migrate_run_name_index(frame: ln.Record, index: ln.Feature) -> None:
+    """Keep old run uids as a column while moving the display name to the index."""
+    from django.db import transaction
+
+    schema = frame.schema
+    if schema.index is not None and schema.index.uid == index.uid:
+        return
+    if schema.index is None or schema.index.name != RUN_UID:
+        sys.exit(f"{frame.name} schema has an unexpected index")
+    if ln.Record.filter(schema=schema).exclude(pk=frame.pk).exists():
+        sys.exit(f"schema {schema.uid} is shared; refusing to change its index")
+    with transaction.atomic(using=schema._state.db):
+        schema.add(index)
+        names = []
+        for record in ln.Record.filter(type=frame, is_type=False).select_related("run"):
+            # Stage the new index as a normal feature first. Schema.save then
+            # migrates run_uid out of Record.name and promotes this name into it.
+            name = record.name
+            if record.run_id is not None:
+                name = record.run.name or run_name(record.run.params or {}, default=name)
+            names.append(ln.models.RecordJson(record=record, feature=index, value=name))
+        # Write only the new index values. Replacing all feature annotations
+        # would unnecessarily rewrite every artifact link and be slow remotely.
+        ln.models.RecordJson.objects.using(schema._state.db).bulk_create(
+            names,
+            update_conflicts=True,
+            unique_fields=["record", "feature"],
+            update_fields=["value"],
+        )
+        schema.index = index
+        schema.save(index_name_conflict="keep_feature")
 
 
 def ensure_run_schema(
@@ -283,6 +330,15 @@ def ensure_run_schema(
         name: ensure_feature(name, feature_dtype(value))
         for name, value in columns.items()
     }
+    # Reuse the former private index feature so existing uid values survive
+    # the index migration and remain visible as a separate sheet column.
+    features[RUN_UID] = ensure_private_index(
+        frame,
+        experiment_name=experiment_name,
+        feature_name=RUN_UID,
+        description=f"Run uid for {experiment_name}.",
+        extra_key="run_index_feature_uid",
+    )
     features.update(run_metadata_features())
     schema = frame.schema
     if schema is None:
@@ -297,8 +353,7 @@ def ensure_run_schema(
         frame.schema = schema
         frame.save()
     else:
-        if schema.index is None or schema.index.uid != index.uid:
-            sys.exit(f"{frame.name} schema is not indexed by its run uid")
+        _migrate_run_name_index(frame, index)
         members = list(schema.members.all())
         present = {feature.name for feature in members}
         missing = [feature for name, feature in features.items() if name not in present]
@@ -458,7 +513,8 @@ def record_run(
 ) -> ln.Record:
     """Create or update the data record for the active benchmark run.
 
-    The record's type is the runs frame under the experiment page. Its
+    The record's type is the runs frame under the experiment page. Its name
+    comes from config.name (falling back to the run uid for older configs). Its
     reference is the Lamin run URL. The sheet stores the config, the run start
     time, whether it succeeded, and links to the measurement artifacts.
     Re-entering the same Lamin run updates that record instead of adding
@@ -472,8 +528,13 @@ def record_run(
     runs = ensure_runs_frame(experiment)
     columns = config_columns(params)
     index, features = ensure_run_schema(runs, columns)
+    name = run_name(params, default=run.uid)
+    if run.name != name:
+        run.name = name
+        run.save(update_fields=["name"])
     values = {
-        index: run.uid,
+        index: name,
+        features[RUN_UID]: run.uid,
         **{features[name]: value for name, value in columns.items()},
         features["started_at"]: run.started_at,
         features["succeeded"]: exit_code in (None, 0),
@@ -484,15 +545,21 @@ def record_run(
     if exit_code is not None:
         description = f"{description} Exit code {exit_code}."
     reference = f"https://lamin.ai/{instance}/run/{run.uid}"
-    record = ln.Record.filter(type=runs, name=run.uid).one_or_none()
+    record = ln.Record.filter(type=runs, run=run).one_or_none()
+    if record is None:
+        record = ln.Record.filter(type=runs, reference=reference).one_or_none()
     if record is None:
         record = ln.Record(
+            name=name,
             type=runs,
+            _search_names=False,
             description=description,
             reference=reference,
             reference_type="url",
             features=values,
-        ).save()
+        )
+        record.run = run
+        record.save()
     else:
         changed = False
         if record.description != description:
@@ -505,6 +572,8 @@ def record_run(
         if changed:
             record.save()
         record.features.set_values(values)
+    record.transforms.add(run.transform)
+    record.runs.add(run)
     if not runs.input_of_runs.filter(pk=run.pk).exists():
         runs.input_of_runs.add(run)
     _link_run_artifacts(record, features["artifact"], artifacts)

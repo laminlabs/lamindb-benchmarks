@@ -1,3 +1,4 @@
+name: "Experiment 4: 100 records"
 experiment: experiments/experiment_004
 n_rows: 100
 n_values: 100

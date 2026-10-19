@@ -31,9 +31,16 @@ from benchmarks.config import (
     CONFIG_ENV,
     instance_from_env,
     read_config,
+    run_name,
 )
-from benchmarks.experiment import experiment_path, record_run, stage_scripts, sync_experiment
+from benchmarks.experiment import (
+    experiment_path,
+    record_run,
+    stage_scripts,
+    sync_experiment,
+)
 from benchmarks.measurements import RESULTS_DIR_ENV, load_measurements
+from benchmarks.provenance import attach_git_provenance, benchmark_provenance
 
 
 def _feature_dtype(value: object) -> str:
@@ -111,7 +118,7 @@ def _experiment(params: dict) -> Path:
     return experiment_path(raw)
 
 
-def _config_path(argv: list[str] | None = None) -> Path | None:
+def _config_path(argv: list[str] | None = None) -> Path:
     parser = argparse.ArgumentParser(description="Run one benchmark config.")
     parser.add_argument(
         "config",
@@ -119,32 +126,53 @@ def _config_path(argv: list[str] | None = None) -> Path | None:
         help="Config file. Default: BENCHMARK_CONFIG or ./config.yml.",
     )
     args = parser.parse_args(argv)
-    if args.config is None:
-        return None
-    path = Path(args.config)
+    path = Path(args.config or os.environ.get(CONFIG_ENV, "").strip() or "config.yml")
     if not path.is_absolute():
         path = Path.cwd() / path
     return path.resolve()
 
 
+def track_experiment(experiment: Path, params: dict) -> None:
+    """Use an independent transform family for each experiment's runner."""
+    from lamindb.base.uids import base62_12
+
+    key = f"benchmarks/experiments/{experiment.name}"
+    transform = ln.Transform.filter(key=key, is_latest=True).first()
+    # An explicit uid stem prevents the SDK's source-hash lookup from renaming
+    # another experiment's transform when both execute this same runner file.
+    stem = transform.uid[:12] if transform is not None else base62_12()
+    ln.track(stem, key=key, path=Path(__file__).resolve(), params=params)
+
+
 def main(argv: list[str] | None = None) -> None:
     config_path = _config_path(argv)
     params = read_config(config_path)
+    name = run_name(params, default="benchmark")
     experiment = _experiment(params)
+    try:
+        provenance = benchmark_provenance(_ROOT, experiment, config_path)
+    except (ValueError, RuntimeError) as error:
+        sys.exit(f"Cannot start benchmark: {error}")
     instance = instance_from_env(BENCHMARK_INSTANCE_ENV, BENCHMARK_INSTANCE)
 
     child_env = os.environ.copy()
     child_env.pop("LAMIN_INITIATED_BY_RUN_UID", None)
-    if config_path is not None:
-        child_env[CONFIG_ENV] = str(config_path)
+    child_env[CONFIG_ENV] = str(config_path)
 
     exit_code = 1
     ln.connect(instance)
-    ln.track(params=params)
+    track_experiment(experiment, params)
     try:
         run = ln.context.run
         if run is None:
             sys.exit("benchmark run is missing after ln.track()")
+        run.name = name if "name" in params else run.uid
+        run.save(update_fields=["name"])
+        attach_git_provenance(run, provenance)
+        print(f"Git revision: {run.reference}")
+        if not provenance["editable_dependencies_clean"]:
+            print("[warn] editable Lamin packages have local changes; their Git references "
+                  "do not include those changes (see run.extra_data['git']).")
         record = sync_experiment(experiment, params)
         print(f"experiment: https://lamin.ai/{instance}/record/{record.uid}")
         with tempfile.TemporaryDirectory(prefix="benchmark-results-") as raw_results:

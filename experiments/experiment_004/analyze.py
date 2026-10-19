@@ -33,6 +33,7 @@ from benchmarks.experiment import (
     record_analysis,
     record_by_name,
     require_child,
+    run_uid_of,
 )
 
 NAME = Path(__file__).resolve().parent.name
@@ -111,24 +112,24 @@ def experiment_record() -> ln.Record:
 
 def load_samples(runs: ln.Record) -> tuple[pd.DataFrame, pd.DataFrame]:
     feature = _artifact_feature(runs)
-    selected = {record.name: n_rows for record, _values, n_rows in latest_runs(runs)}
+    selected = {record.uid: n_rows for record, _values, n_rows in latest_runs(runs)}
     latency: list[dict] = []
     sizes: list[dict] = []
     for record in ln.Record.filter(type=runs, is_type=False):
-        if record.name not in selected:
+        if record.uid not in selected:
             continue
-        n_rows = selected[record.name]
+        n_rows = selected[record.uid]
         print(f"using {record.name} for {n_rows} subjects")
         for artifact in measurements(record, feature):
             values = artifact.features.get_values()
             query_name = values.get("query_name")
             if query_name in INSERTS and values.get("measurement_kind") == "insert":
-                latency.extend(_latency_rows(record.name, n_rows, query_name, artifact))
+                latency.extend(_latency_rows(run_uid_of(record), n_rows, query_name, artifact))
             elif (
                 query_name == "relation_size"
                 and values.get("measurement_kind") == "distribution"
             ):
-                sizes.append(_size_row(record.name, n_rows, values))
+                sizes.append(_size_row(run_uid_of(record), n_rows, values))
     if not latency:
         sys.exit(f"succeeded {NAME} runs have no insert measurements")
     if not sizes:

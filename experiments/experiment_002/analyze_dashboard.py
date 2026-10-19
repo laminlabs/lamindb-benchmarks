@@ -34,6 +34,7 @@ from benchmarks.experiment import (
     record_analysis,
     record_by_name,
     require_child,
+    run_uid_of,
 )
 
 NAME = Path(__file__).resolve().parent.name
@@ -149,11 +150,11 @@ def load(runs: ln.Record) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         print(f"using {record.name} for {n_rows} records")
         facts = _run_facts(record, feature, n_rows)
         if facts["health"]:
-            snapshots.append({"run_uid": record.name, "n_rows": n_rows, **facts["health"]})
+            snapshots.append({"run_uid": run_uid_of(record), "n_rows": n_rows, **facts["health"]})
         elif facts["insert"]:
-            snapshots.append({"run_uid": record.name, "n_rows": n_rows, **facts["insert"]})
+            snapshots.append({"run_uid": run_uid_of(record), "n_rows": n_rows, **facts["insert"]})
         else:
-            snapshots.append({"run_uid": record.name, "n_rows": n_rows})
+            snapshots.append({"run_uid": run_uid_of(record), "n_rows": n_rows})
         queries.extend(facts["queries"])
         storage.extend(facts["storage"])
         if not facts["explained"]:
@@ -310,7 +311,7 @@ def _run_facts(record: ln.Record, feature: ln.Feature, n_rows: int) -> dict:
         health.setdefault(key, value)
     for query_name in LOOKUPS:
         row = {
-            "run_uid": record.name,
+            "run_uid": run_uid_of(record),
             "n_rows": n_rows,
             "query_name": query_name,
             **plans.get(query_name, {}),

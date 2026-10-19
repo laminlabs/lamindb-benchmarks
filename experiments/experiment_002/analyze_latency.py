@@ -34,6 +34,7 @@ from benchmarks.experiment import (
     record_analysis,
     record_by_name,
     require_child,
+    run_uid_of,
 )
 
 NAME = Path(__file__).resolve().parent.name
@@ -120,14 +121,14 @@ def load_samples(runs: ln.Record) -> pd.DataFrame:
     feature = runs.schema.members.filter(name="artifact").one_or_none()
     if feature is None:
         sys.exit(f"{runs.name} schema has no artifact column")
-    selected = {record.name: n_rows for record, _values, n_rows in latest_runs(runs)}
+    selected = {record.uid: n_rows for record, _values, n_rows in latest_runs(runs)}
     if not selected:
         sys.exit(f"no succeeded runs for {NAME}")
     rows: list[dict] = []
     for record in ln.Record.filter(type=runs, is_type=False):
-        if record.name not in selected:
+        if record.uid not in selected:
             continue
-        n_rows = selected[record.name]
+        n_rows = selected[record.uid]
         print(f"using {record.name} for {n_rows} records")
         for artifact in measurements(record, feature):
             values = artifact.features.get_values()
@@ -151,7 +152,7 @@ def load_samples(runs: ln.Record) -> pd.DataFrame:
                     continue
                 rows.append(
                     {
-                        "run_uid": record.name,
+                        "run_uid": run_uid_of(record),
                         "query_name": query_name,
                         "n_rows": n_rows,
                         REPETITION: int(repetition),

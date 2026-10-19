@@ -1,3 +1,4 @@
+name: "Experiment 2: 1,000 records"
 experiment: experiments/experiment_002
 n_rows: 1000
 n_repetitions: 11

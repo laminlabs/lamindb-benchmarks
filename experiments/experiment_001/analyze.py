@@ -32,6 +32,7 @@ from benchmarks.experiment import (
     record_analysis,
     record_by_name,
     require_child,
+    run_uid_of,
 )
 
 NAME = Path(__file__).resolve().parent.name
@@ -102,7 +103,7 @@ def load_samples(experiment: ln.Record) -> pd.DataFrame:
             latency = pd.to_numeric(frame[LATENCY], errors="coerce").dropna()
             rows.extend(
                 {
-                    "run_uid": record.name,
+                    "run_uid": run_uid_of(record),
                     "query_name": query_name,
                     "n_rows": n_rows,
                     LATENCY: float(value),
