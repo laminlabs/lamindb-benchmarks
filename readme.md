@@ -75,6 +75,8 @@ n_repetitions: 3
 
 `name` is the display name of both the Lamin run and its run record. It must be a non-empty string of at most 150 characters. Older configs without it fall back to the run uid. Repeated executions may share a display name; their run uids and run records remain distinct. The run sheet uses `name` as its display index and stores the execution uid separately in `run_uid`. The record explicitly links both its run and the run's transform, so they appear as attachments. Existing run-uid indexes are migrated without discarding the old uid values.
 
+Run and analysis sheets store `started_at` with feature dtype `datetime`, as timezone-naive UTC for Hub rendering. Offset-aware start times are converted to UTC before the timezone is removed.
+
 Every other value becomes a column. Rules:
 
 - Values are scalars: `bool`, `int`, `float`, or `str`. No lists, no nested mappings, no nulls. A null key is skipped.

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
@@ -43,8 +44,8 @@ QUERY_SCRIPT = "query.py"
 RUN_FEATURES = (
     (
         "started_at",
-        "datetime64[ns, UTC]",
-        "datetime64[ns, UTC]",
+        "datetime",
+        datetime,
         "Start time of the benchmark run.",
     ),
     ("succeeded", "bool", bool, "Whether the benchmark run exited zero."),
@@ -214,6 +215,13 @@ def run_metadata_features() -> dict[str, ln.Feature]:
         name: ensure_described_feature(name, dtype_str, dtype, description)
         for name, dtype_str, dtype, description in RUN_FEATURES
     }
+
+
+def naive_utc(value: datetime) -> datetime:
+    """Store sheet timestamps as naive UTC for Hub datetime rendering."""
+    if value.tzinfo is not None:
+        return value.astimezone(UTC).replace(tzinfo=None)
+    return value
 
 
 def ensure_feature_type(name: str) -> ln.Feature:
@@ -536,7 +544,7 @@ def record_run(
         index: name,
         features[RUN_UID]: run.uid,
         **{features[name]: value for name, value in columns.items()},
-        features["started_at"]: run.started_at,
+        features["started_at"]: naive_utc(run.started_at),
         features["succeeded"]: exit_code in (None, 0),
     }
     if artifacts:
@@ -617,7 +625,7 @@ def record_analysis(
         sys.exit(f"{frame.name} schema is missing title, started_at, or artifact")
     values = {
         index: run.uid,
-        started_at: run.started_at,
+        started_at: naive_utc(run.started_at),
         artifact_feature: artifacts,
     }
     if title is not None:
