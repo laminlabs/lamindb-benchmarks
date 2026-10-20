@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from collections.abc import Callable
 
 import lamindb as ln
@@ -22,6 +23,43 @@ RECORD_TABLES = (
 )
 _IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 PLAN_LIMIT = 1000
+BUFFER_FIELDS = {
+    "shared_hit_blocks": "Shared Hit Blocks",
+    "shared_read_blocks": "Shared Read Blocks",
+    "shared_dirtied_blocks": "Shared Dirtied Blocks",
+    "shared_written_blocks": "Shared Written Blocks",
+    "local_hit_blocks": "Local Hit Blocks",
+    "local_read_blocks": "Local Read Blocks",
+    "local_dirtied_blocks": "Local Dirtied Blocks",
+    "local_written_blocks": "Local Written Blocks",
+    "temp_read_blocks": "Temp Read Blocks",
+    "temp_written_blocks": "Temp Written Blocks",
+}
+
+
+def profile_lookup(replay: Callable[[], object]) -> tuple[object, dict]:
+    """Count driver executions and time execute calls, including network waits.
+
+    Do not retain SQL or parameters during timing. Fetching and DataFrame
+    construction remain in end-to-end latency, outside these execute timings.
+    """
+    from django.db import connections
+
+    count = 0
+    elapsed = 0.0
+
+    def measure(execute, sql, params, many, context):
+        nonlocal count, elapsed
+        count += 1
+        started = time.perf_counter()
+        try:
+            return execute(sql, params, many, context)
+        finally:
+            elapsed += time.perf_counter() - started
+
+    with connections[ln.Record.objects.db].execute_wrapper(measure):
+        value = replay()
+    return value, {"sql_execute_count": count, "sql_execute_ms": round(elapsed * 1000, 3)}
 
 
 def table_kind(name: str) -> str:
@@ -69,13 +107,21 @@ def explain_lookup(query_name: str, uids: list[str], replay: Callable[[], object
     explained, which is the plan the archived benchmark recorded.
     """
     statements = _record_selects(replay)
-    plans = [plan for sql in statements if (plan := _explain_sql(sql)) is not None]
+    explained = [
+        (sql, plan) for sql in statements if (plan := _explain_sql(sql)) is not None
+    ]
+    plans = [plan for _sql, plan in explained]
     source = "lookup"
     if not plans:
         fallback = _explain_queryset(query_name, uids)
         plans = [fallback] if fallback is not None else []
         source = "record_filter"
-    return _aggregate(plans, source)
+    facts = _aggregate(plans, source)
+    # Keep one SQL example and one complete replay's plans in the artifact body.
+    # The fallback plan has no captured SQL; do not label it as an actual lookup.
+    facts["sql"] = explained[0][0] if explained else ""
+    facts["explain_analyze"] = json.dumps(plans, indent=2)
+    return facts
 
 
 def _distribution() -> list[dict]:
@@ -183,7 +229,7 @@ def _explain_sql(sql: str) -> dict | None:
     statement = sql.strip().rstrip(";").replace("%", "%%")
     try:
         with _cursor() as cur:
-            cur.execute(f"EXPLAIN (ANALYZE, FORMAT JSON) {statement}")
+            cur.execute(f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {statement}")
             raw = cur.fetchone()[0]
     except Exception:
         return None
@@ -199,7 +245,7 @@ def _explain_queryset(query_name: str, uids: list[str]) -> dict | None:
         else ln.Record.filter(uid=uids[0])
     )
     try:
-        raw = query.explain(analyze=True, format="json")
+        raw = query.explain(analyze=True, buffers=True, format="json")
     except Exception:
         return None
     return _plan_root(raw)
@@ -217,6 +263,8 @@ def _plan_root(raw: object) -> dict | None:
 
 
 def _aggregate(plans: list[dict], source: str) -> dict:
+    if not plans:
+        raise ValueError("no EXPLAIN ANALYZE plan was available")
     text = json.dumps(plans)
     execution = [
         float(plan["Execution Time"])
@@ -228,6 +276,11 @@ def _aggregate(plans: list[dict], source: str) -> dict:
         for plan in plans
         if _is_number(plan.get("Planning Time"))
     ]
+    buffers = {
+        # Root counters include child nodes; summing the tree double-counts I/O.
+        key: sum(int(plan.get("Plan", {}).get(field, 0)) for plan in plans)
+        for key, field in BUFFER_FIELDS.items()
+    }
     return {
         "execution_time_ms": round(sum(execution), 3) if execution else None,
         "planning_time_ms": round(sum(planning), 3) if planning else None,
@@ -236,6 +289,7 @@ def _aggregate(plans: list[dict], source: str) -> dict:
         "n_statements": len(plans),
         "plan_source": source,
         "query_plan": text[:PLAN_LIMIT],
+        **buffers,
     }
 
 

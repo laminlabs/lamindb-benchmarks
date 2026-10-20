@@ -28,6 +28,7 @@ def write_measurement(
     key: str,
     description: str,
     features: dict,
+    columns: tuple[str, ...] = COLUMNS,
 ) -> Path | None:
     """Write one parquet file and record it in the results manifest.
 
@@ -42,7 +43,7 @@ def write_measurement(
         raise ValueError(f"measurement key must be a relative parquet key, got {key!r}")
 
     file_name = f"{name}.parquet"
-    frame = pd.DataFrame(rows, columns=list(COLUMNS))
+    frame = pd.DataFrame(rows, columns=list(columns))
     frame.to_parquet(directory / file_name, index=False)
 
     manifest_path = directory / MANIFEST_NAME

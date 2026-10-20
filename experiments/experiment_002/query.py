@@ -13,6 +13,7 @@ Usage:
 """
 from __future__ import annotations
 
+import json
 import random
 import sys
 from pathlib import Path
@@ -24,6 +25,8 @@ for _path in (_ROOT, _HERE):
         sys.path.insert(0, str(_path))
 
 import lamindb as ln
+from observe import BUFFER_FIELDS, explain_lookup, profile_lookup
+from workload import workload_parameters
 
 from benchmarks.config import (
     LOAD_INSTANCE,
@@ -47,6 +50,8 @@ LOOKUPS = (
 
 def main() -> None:
     params = read_config()
+    workload = workload_parameters(params)
+    rng = random.Random(workload["random_seed"])
     n_rows = require_int(params, "n_rows", minimum=1)
     repetitions = require_int(
         params, "n_repetitions", minimum=1, default=DEFAULT_REPETITIONS
@@ -58,20 +63,28 @@ def main() -> None:
     # Load-instance finish fails while its Storage row is missing.
     # ln.track(params={"n_rows": n_rows, "n_repetitions": repetitions, "n_batch": n_batch})
     uids = list(
-        ln.Record.filter(name__startswith=prefix).values_list("uid", flat=True)
+        ln.Record.filter(name__startswith=prefix).order_by("name", "uid").values_list("uid", flat=True)
     )
     if not uids:
         sys.exit(f"no intervention records found for {prefix!r}")
-    single = random.sample(uids, 1)
-    batch = random.sample(uids, min(n_batch, len(uids)))
+    single = rng.sample(uids, 1)
+    batch = rng.sample(uids, min(n_batch, len(uids)))
     sampled_by_query = {}
     for query_name, is_batch in LOOKUPS:
         sampled = batch if is_batch else single
         sampled_by_query[query_name] = sampled
-        timed = time_calls(
-            lambda query_name=query_name, sampled=sampled: _lookup(query_name, sampled),
-            repetitions,
-        )
+        sql_samples = []
+
+        def measured_lookup(query_name=query_name, sampled=sampled, sql_samples=sql_samples):
+            value, stats = profile_lookup(lambda: _lookup(query_name, sampled))
+            sql_samples.append(stats)
+            return value
+
+        timed = time_calls(measured_lookup, repetitions)
+        rows = [
+            {**row, **stats}
+            for row, stats in zip(rows_from_timed(timed), sql_samples, strict=True)
+        ]
         print(
             f"query {query_name} n_uids={len(sampled)} "
             f"rows={timed['last_value']} median={timed['latency_median_ms']} ms "
@@ -79,7 +92,8 @@ def main() -> None:
         )
         written = write_measurement(
             query_name,
-            rows_from_timed(timed),
+            rows,
+            columns=("repetition", "latency_ms", "value", "sql_execute_count", "sql_execute_ms"),
             key=f"benchmarks/measurements/{NAME_PREFIX}/{query_name}.parquet",
             description=f"Timed {query_name} of intervention records named {prefix}*",
             features={
@@ -88,6 +102,8 @@ def main() -> None:
                 "name_prefix": prefix,
                 "n_rows": n_rows,
                 "n_uids": len(sampled),
+                "sampled_uids": json.dumps(sampled),
+                **workload,
             },
         )
         print(
@@ -95,14 +111,15 @@ def main() -> None:
             if written is None
             else f"measurement written: {written.name}"
         )
-    _record_explain(sampled_by_query, n_rows, prefix)
+    _record_explain(sampled_by_query, n_rows, prefix, workload)
     _record_database(n_rows, prefix)
     # ln.finish()
 
 
-def _record_explain(sampled_by_query: dict[str, list[str]], n_rows: int, prefix: str) -> None:
-    from observe import explain_lookup
-
+def _record_explain(
+    sampled_by_query: dict[str, list[str]], n_rows: int, prefix: str,
+    workload: dict[str, int],
+) -> None:
     for query_name, _is_batch in LOOKUPS:
         sampled = sampled_by_query[query_name]
         try:
@@ -126,6 +143,9 @@ def _record_explain(sampled_by_query: dict[str, list[str]], n_rows: int, prefix:
             "n_statements": facts["n_statements"],
             "plan_source": facts["plan_source"],
             "query_plan": facts["query_plan"],
+            **workload,
+            "sampled_uids": json.dumps(sampled),
+            **{key: facts[key] for key in BUFFER_FIELDS},
         }
         if facts["execution_time_ms"] is not None:
             features["execution_time_ms"] = facts["execution_time_ms"]
@@ -135,7 +155,14 @@ def _record_explain(sampled_by_query: dict[str, list[str]], n_rows: int, prefix:
         scan = _scan_label(facts["used_index"], facts["used_seq_scan"])
         written = write_measurement(
             f"explain_{query_name}",
-            [{"repetition": 1, "latency_ms": execution, "value": facts["n_statements"]}],
+            [{
+                "repetition": 1,
+                "latency_ms": execution,
+                "value": facts["n_statements"],
+                "sql": facts["sql"],
+                "explain_analyze": facts["explain_analyze"],
+            }],
+            columns=("repetition", "latency_ms", "value", "sql", "explain_analyze"),
             key=f"benchmarks/measurements/{NAME_PREFIX}/explain_{query_name}.parquet",
             description=(
                 f"EXPLAIN ANALYZE for {query_name}: {scan} scan, "

@@ -36,6 +36,7 @@ from benchmarks.experiment import (
     require_child,
     run_uid_of,
 )
+from experiments.experiment_002.workload import matches_analysis_workload
 
 NAME = Path(__file__).resolve().parent.name
 # column, panel title, y label, scale applied to the stored number, text format
@@ -261,6 +262,8 @@ def latest_runs(runs: ln.Record) -> list[tuple[ln.Record, dict, int]]:
     for record in ln.Record.filter(type=runs, is_type=False):
         values = record.features.get_values()
         if values.get("succeeded") is not True:
+            continue
+        if not matches_analysis_workload((record.run.params or {}) if record.run else {}):
             continue
         n_rows = as_int(values.get("n_rows"), f"{record.name} n_rows")
         stamp = str(values.get("started_at") or "")

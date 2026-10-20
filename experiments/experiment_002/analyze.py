@@ -1,6 +1,6 @@
 """Summarize feature-lookup latency for succeeded experiment_002 runs.
 
-The first repetition is the cold call and is kept out of the plot.
+The first repetition is the first call and is kept out of the plot.
 Warm repetitions are summarized as median latency, with the 5th and 95th
 percentiles as error bars. Uploads the table and an SVG figure, then stores
 an analysis record that links both.
@@ -35,6 +35,7 @@ from benchmarks.experiment import (
     require_child,
     run_uid_of,
 )
+from experiments.experiment_002.workload import matches_analysis_workload
 
 NAME = Path(__file__).resolve().parent.name
 LATENCY = "latency_ms"
@@ -52,11 +53,11 @@ Compares how long each uid lookup takes after a controlled number of interventio
 
 ## What is analyzed
 
-Succeeded runs only. Each run times three lookups on the same sampled records: one record by uid, that record with its features, and a batch of records with their features. The first repetition is the cold call. Later repetitions are the warm calls.
+Succeeded runs only. Each run times three lookups on the same sampled records: one record by uid, that record with its features, and a batch of records with their features. The first repetition is the first call. Later repetitions are the warm calls.
 
 ## How it is reported
 
-One table row per lookup and number of records. The cold call is the first repetition. The median, 5th percentile, and 95th percentile use only the warm repetitions. The plot is an unconnected scatter of the warm median against the number of records, with a log scale on the x axis. Error bars span the 5th to the 95th percentile. Points are not joined.
+One table row per lookup and number of records. The first call is the first repetition. The median, 5th percentile, and 95th percentile use only the warm repetitions. The plot is an unconnected scatter of the warm median against the number of records, with a log scale on the x axis. Error bars span the 5th to the 95th percentile. Points are not joined.
 
 ## Artifacts
 
@@ -127,6 +128,8 @@ def load_samples(runs: ln.Record) -> pd.DataFrame:
         values = record.features.get_values()
         if values.get("succeeded") is not True:
             continue
+        if not matches_analysis_workload((record.run.params or {}) if record.run else {}):
+            continue
         succeeded += 1
         n_rows = _as_int(values.get("n_rows"), f"{record.name} n_rows")
         artifacts = _measurements(record, feature)
@@ -172,11 +175,11 @@ def load_samples(runs: ln.Record) -> pd.DataFrame:
 
 
 def summarize(samples: pd.DataFrame) -> pd.DataFrame:
-    """Warm median and p95, plus the cold first call, by lookup and n_rows."""
+    """Warm median and p95, plus the first call, by lookup and n_rows."""
     rows = []
     grouped = samples.groupby(["query_name", "n_rows"], sort=True)
     for (query_name, n_rows), group in grouped:
-        cold = group[group[REPETITION] == 1][LATENCY]
+        first_call = group[group[REPETITION] == 1][LATENCY]
         warm = group[group[REPETITION] > 1][LATENCY]
         if warm.empty:
             print(f"[warn] {query_name} at {n_rows} rows has no warm repetitions")
@@ -188,7 +191,7 @@ def summarize(samples: pd.DataFrame) -> pd.DataFrame:
                 "n_uids": _group_uids(group, query_name, int(n_rows)),
                 "n_runs": int(group["run_uid"].nunique()),
                 "n_warm": int(len(warm)),
-                "latency_cold_ms": float(cold.median()) if not cold.empty else None,
+                "latency_first_call_ms": float(first_call.median()) if not first_call.empty else None,
                 "latency_median_ms": float(warm.median()),
                 "latency_p05_ms": float(warm.quantile(0.05)),
                 "latency_p95_ms": float(warm.quantile(0.95)),
@@ -266,7 +269,7 @@ def upload(
         summary,
         key=TABLE_KEY,
         description=(
-            "Warm lookup latency by record count: cold call, median, "
+            "Warm lookup latency by record count: first call, median, "
             "5th percentile, and 95th percentile."
         ),
         features=features,

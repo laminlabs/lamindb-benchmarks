@@ -22,6 +22,8 @@ for _path in (_ROOT, _HERE):
 
 import lamindb as ln
 import pandas as pd
+from django.db import OperationalError, transaction
+from workload import workload_parameters
 
 from benchmarks.config import (
     LOAD_INSTANCE,
@@ -35,53 +37,99 @@ from benchmarks.measurements import write_measurement
 NAME_PREFIX = Path(__file__).resolve().parent.name
 NAME_FIELD = "__lamindb_record_name__"
 BATCH_SIZE = 1000
+MAX_BATCH_ATTEMPTS = 3
+# Serialization failure, deadlock, and lock timeout: safe to retry after rollback.
+RETRYABLE_SQLSTATES = {"40001", "40P01", "55P03"}
 SUPPLIERS = [f"supplier_{i:02d}" for i in range(10)]
 GENES = [f"gene_{i:03d}" for i in range(100)]
 MOLECULES = [f"mol_{i:02d}" for i in range(20)]
 PROTOCOLS = ["protocol_A", "protocol_B", "protocol_C", "protocol_D"]
-GENES_PER_RECORD = (3, 5)
-MOLECULES_PER_RECORD = (1, 3)
 
 
 def main() -> None:
-    n_rows = require_int(read_config(), "n_rows", minimum=1)
+    params = read_config()
+    n_rows = require_int(params, "n_rows", minimum=1)
+    workload = workload_parameters(params)
     ln.connect(instance_from_env(LOAD_INSTANCE_ENV, LOAD_INSTANCE))
     # Load-instance finish fails while its Storage row is missing.
     # ln.track(params={"n_rows": n_rows})
-    created = create_interventions(n_rows)
+    created = create_interventions(n_rows, workload)
     print(f"setup created {created} intervention records")
     # ln.finish()
 
 
-def create_interventions(n_rows: int) -> int:
-    intervention, features, pools = ensure_intervention_sheet()
+def create_interventions(n_rows: int, workload: dict[str, int]) -> int:
+    intervention, _, pools = ensure_intervention_sheet()
     from observe import EVENTS_TABLE, count_rows
 
     before = count_rows(EVENTS_TABLE)
-    started = time.perf_counter()
-    created = _insert_rows(intervention, features, pools, n_rows)
-    elapsed = time.perf_counter() - started
+    batches = []
+    created = _insert_rows(intervention, pools, n_rows, workload, batches)
+    # Exclude serializing the batch diagnostics from population throughput.
+    elapsed = sum(batch["latency_ms"] for batch in batches) / 1000
     after = count_rows(EVENTS_TABLE)
-    _write_insert(n_rows, created, elapsed, before, after)
+    _write_insert(n_rows, created, elapsed, before, after, workload, batches)
     return created
 
 
 def _insert_rows(
     intervention: ln.Record,
-    features: dict[str, ln.Feature],
     pools: dict,
     n_rows: int,
+    workload: dict[str, int],
+    batches: list[dict],
 ) -> int:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    rng = random.Random(workload["random_seed"])
     created = 0
-    while created < n_rows:
-        count = min(BATCH_SIZE, n_rows - created)
-        rows = [
-            _row(pools, f"{NAME_PREFIX}_{stamp}_{created + offset:05d}")
-            for offset in range(count)
-        ]
-        _save_batch(intervention, features, pools, rows)
-        created += count
+    try:
+        while created < n_rows:
+            count = min(BATCH_SIZE, n_rows - created)
+            batch_started = time.perf_counter()
+            rows = [
+                _row(pools, f"{NAME_PREFIX}_{stamp}_{created + offset:05d}", rng, workload)
+                for offset in range(count)
+            ]
+            attempts = []
+            succeeded = False
+            try:
+                _save_batch(intervention, rows, attempts)
+                succeeded = True
+            finally:
+                batch_seconds = time.perf_counter() - batch_started
+                batches.append({
+                    "repetition": len(batches) + 1,
+                    "latency_ms": round(batch_seconds * 1000, 3),
+                    "value": count if succeeded else 0,
+                    "batch_index": len(batches) + 1,
+                    "batch_size": count,
+                    "records_before": created,
+                    "records_after": created + count if succeeded else created,
+                    "retry_count": max(len(attempts) - 1, 0),
+                    "attempt_count": len(attempts),
+                    "save_ms": round(sum(a["save_ms"] for a in attempts), 3),
+                    "retry_wait_ms": sum(a["retry_wait_ms"] for a in attempts),
+                    "succeeded": succeeded,
+                    "sqlstate": attempts[-1]["sqlstate"] if attempts else "",
+                })
+            created += count
+    finally:
+        # The runner uploads these diagnostics even if a batch exhausts retries.
+        if batches:
+            write_measurement(
+                "insert_batches", batches,
+                columns=tuple(batches[0]),
+                key=f"benchmarks/measurements/{NAME_PREFIX}/insert_batches.parquet",
+                description="Per-batch population timings, retries, and outcomes",
+                features={
+                    "measurement_kind": "insert_batches",
+                    "query_name": "insert_batches",
+                    "n_rows": n_rows,
+                    "batch_size": BATCH_SIZE,
+                    "insert_retry_count": sum(b["retry_count"] for b in batches),
+                    **workload,
+                },
+            )
     return created
 
 
@@ -91,6 +139,8 @@ def _write_insert(
     elapsed: float,
     before: int | None,
     after: int | None,
+    workload: dict[str, int],
+    batches: list[dict],
 ) -> None:
     features: dict = {
         "measurement_kind": "insert",
@@ -99,6 +149,9 @@ def _write_insert(
         "n_rows": n_rows,
         "n_records": created,
         "insert_seconds": round(elapsed, 6),
+        "insert_retry_count": sum(b["retry_count"] for b in batches),
+        "insert_batch_count": len(batches),
+        **workload,
     }
     if elapsed > 0:
         features["insert_records_per_sec"] = round(created / elapsed, 3)
@@ -202,66 +255,61 @@ def ensure_pool(names: list[str], type_record: ln.Record) -> list[ln.Record]:
     return records
 
 
-def _row(pools: dict, name: str) -> dict:
-    lo_g, hi_g = GENES_PER_RECORD
-    lo_m, hi_m = MOLECULES_PER_RECORD
-    treated = date(2024, 1, 1) + timedelta(days=random.randint(0, 700))
+def _row(pools: dict, name: str, rng: random.Random, workload: dict[str, int]) -> dict:
+    lo_g, hi_g = workload["genes_per_record_min"], workload["genes_per_record_max"]
+    lo_m = workload["small_molecules_per_record_min"]
+    hi_m = workload["small_molecules_per_record_max"]
+    treated = date(2024, 1, 1) + timedelta(days=rng.randint(0, 700))
     return {
         NAME_FIELD: name,
-        "dose": f"{round(random.uniform(0.1, 100.0), 2)} uM",
-        "protocol": random.choice(PROTOCOLS),
+        "dose": f"{round(rng.uniform(0.1, 100.0), 2)} uM",
+        "protocol": rng.choice(PROTOCOLS),
         "treatment_date": treated,
-        "treatment_time_min": random.randint(5, 1440),
-        "supplier": random.choice(pools["suppliers"]).name,
+        "treatment_time_min": rng.randint(5, 1440),
+        "supplier": rng.choice(pools["suppliers"]).name,
         "genes": [
             gene.name
-            for gene in random.sample(pools["genes"], random.randint(lo_g, hi_g))
+            for gene in rng.sample(pools["genes"], rng.randint(lo_g, hi_g))
         ],
         "small_molecules": [
             molecule.name
-            for molecule in random.sample(pools["molecules"], random.randint(lo_m, hi_m))
+            for molecule in rng.sample(pools["molecules"], rng.randint(lo_m, hi_m))
         ],
     }
 
 
 def _save_batch(
     intervention: ln.Record,
-    features: dict[str, ln.Feature],
-    pools: dict,
     rows: list[dict],
+    attempts: list[dict],
 ) -> None:
     frame = pd.DataFrame(rows)
-    try:
-        ln.Record.from_dataframe(frame, type=intervention).save()
-        return
-    except Exception as error:
-        names = [row[NAME_FIELD] for row in rows]
-        if ln.Record.filter(name__in=names).exists():
-            sys.exit(f"bulk save failed after creating records: {error}")
-        print(
-            f"[warn] bulk save rejected list columns ({error}); "
-            "linking features separately"
-        )
-    scalar = frame.drop(columns=["genes", "small_molecules"])
-    ln.Record.from_dataframe(scalar, type=intervention).save()
-    genes = {record.name: record for record in pools["genes"]}
-    molecules = {record.name: record for record in pools["molecules"]}
-    saved = {
-        record.name: record
-        for record in ln.Record.filter(name__in=[row[NAME_FIELD] for row in rows])
-    }
-    for row in rows:
-        record = saved.get(row[NAME_FIELD])
-        if record is None:
-            sys.exit(f"saved intervention {row[NAME_FIELD]!r} was not found")
-        record.features.add_values(
-            {
-                features["genes"]: [genes[name] for name in row["genes"]],
-                features["small_molecules"]: [
-                    molecules[name] for name in row["small_molecules"]
-                ],
-            }
-        )
+    for attempt in range(1, MAX_BATCH_ATTEMPTS + 1):
+        started = time.perf_counter()
+        retry_delay = 0
+        sqlstate = ""
+        try:
+            with transaction.atomic(using=intervention._state.db):
+                ln.Record.from_dataframe(frame, type=intervention).save()
+            return
+        except OperationalError as error:
+            cause = error.__cause__
+            sqlstate = getattr(cause, "sqlstate", None) or getattr(cause, "pgcode", None) or ""
+            if sqlstate not in RETRYABLE_SQLSTATES or attempt == MAX_BATCH_ATTEMPTS:
+                raise
+            retry_delay = 2 ** (attempt - 1)
+            print(
+                f"[warn] batch save failed ({sqlstate}); "
+                f"retrying in {retry_delay}s (attempt {attempt + 1}/{MAX_BATCH_ATTEMPTS})"
+            )
+        finally:
+            attempts.append({
+                "save_ms": (time.perf_counter() - started) * 1000,
+                "retry_wait_ms": retry_delay * 1000,
+                "sqlstate": sqlstate,
+            })
+        if retry_delay:
+            time.sleep(retry_delay)
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
 
 Reads measurements captured during each run. The load database is wiped
 between configs, so EXPLAIN ANALYZE, table sizes, and server health are not
-recomputed here. The first lookup repetition is the cold call and is left out
+recomputed here. The first lookup repetition is the first call and is left out
 of the latency lines.
 
 Usage:
@@ -36,6 +36,7 @@ from benchmarks.experiment import (
     require_child,
     run_uid_of,
 )
+from experiments.experiment_002.workload import matches_analysis_workload
 
 NAME = Path(__file__).resolve().parent.name
 LOOKUPS = (
@@ -79,7 +80,7 @@ Brings the scale measurements for this experiment into one view. Each point is t
 
 Succeeded runs only. Insert rate is the timed creation of the intervention records. Write events are entries in the database write log after the run. Auxiliary entries are rows in the record link and record JSON tables. Disk space and cache hit ratio are the load database's own figures at the end of the run, not a shared server total.
 
-Client latency is the warm median of the three uid lookups. The first repetition is the cold call and is not plotted. Error bars span the warm 5th to 95th percentile. Database execution time and scan type come from EXPLAIN ANALYZE, captured once after those timed calls because a later analysis cannot see a wiped database. A lookup is an index scan only when every explained record or link statement used an index and none used a sequential scan. Mixed means the plan used both.
+Client latency is the warm median of the three uid lookups. The first repetition is the first call and is not plotted. Error bars span the warm 5th to 95th percentile. Database execution time and scan type come from EXPLAIN ANALYZE, captured once after those timed calls because a later analysis cannot see a wiped database. A lookup is an index scan only when every explained record or link statement used an index and none used a sequential scan. Mixed means the plan used both.
 
 ## How it is reported
 
@@ -271,6 +272,8 @@ def _latest_runs(runs: ln.Record) -> list[tuple[ln.Record, dict, int]]:
     for record in ln.Record.filter(type=runs, is_type=False):
         values = record.features.get_values()
         if values.get("succeeded") is not True:
+            continue
+        if not matches_analysis_workload((record.run.params or {}) if record.run else {}):
             continue
         n_rows = _as_int(values.get("n_rows"), f"{record.name} n_rows")
         stamp = str(values.get("started_at") or "")
@@ -557,7 +560,10 @@ def _health_row(values: dict) -> dict:
 
 def _insert_row(values: dict) -> dict:
     row = {}
-    for key in ("insert_seconds", "insert_records_per_sec", "n_records", "n_events"):
+    for key in (
+        "insert_seconds", "insert_records_per_sec", "n_records", "n_events",
+        "insert_retry_count", "insert_batch_count",
+    ):
         number = _optional_number(values.get(key))
         if number is not None:
             row[key] = number
@@ -585,7 +591,9 @@ def _plan_row(values: dict) -> dict:
         "scan": _scan_kind(values),
         "plan_source": values.get("plan_source"),
     }
-    for key in ("execution_time_ms", "planning_time_ms", "n_statements"):
+    from observe import BUFFER_FIELDS
+
+    for key in ("execution_time_ms", "planning_time_ms", "n_statements", *BUFFER_FIELDS):
         number = _optional_number(values.get(key))
         if number is not None:
             row[key] = number

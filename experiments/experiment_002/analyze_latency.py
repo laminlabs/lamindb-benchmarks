@@ -3,7 +3,7 @@
 One facet per lookup. The boxes are vertical. The shared x axis is the
 configured record count, treated as a category so the sizes are evenly
 spaced. Uses the latest succeeded run at each size. Every timed repetition
-is included; the first is the cold call.
+is included; the first is the first call.
 
 Usage:
   python experiments/experiment_002/analyze_latency.py
@@ -36,6 +36,7 @@ from benchmarks.experiment import (
     require_child,
     run_uid_of,
 )
+from experiments.experiment_002.workload import matches_analysis_workload
 
 NAME = Path(__file__).resolve().parent.name
 LATENCY = "latency_ms"
@@ -68,7 +69,7 @@ Shows the spread of timed lookup calls at each configured size.
 
 ## What is analyzed
 
-Succeeded runs only. The latest succeeded run at each record count is used, so a later rerun replaces the earlier one. All three lookups are included: one record by uid, that record with its features, and a batch of records with their features. Every repetition is plotted. The first repetition is the cold call and can sit above the rest of the box.
+Succeeded runs only. The latest succeeded run at each record count is used, so a later rerun replaces the earlier one. All three lookups are included: one record by uid, that record with its features, and a batch of records with their features. Every repetition is plotted. The first repetition is the first call and can sit above the rest of the box.
 
 ## How it is reported
 
@@ -156,7 +157,7 @@ def load_samples(runs: ln.Record) -> pd.DataFrame:
                         "query_name": query_name,
                         "n_rows": n_rows,
                         REPETITION: int(repetition),
-                        "cold": int(repetition) == 1,
+                        "first_call": int(repetition) == 1,
                         LATENCY: float(latency),
                     }
                 )
@@ -233,7 +234,7 @@ def upload(
         key=TABLE_KEY,
         description=(
             "Timed lookup repetitions for the latest succeeded run at each "
-            "record count. Includes the cold first call."
+            "record count. Includes the first call."
         ),
         features=features,
     ).save()
@@ -258,6 +259,8 @@ def latest_runs(runs: ln.Record) -> list[tuple[ln.Record, dict, int]]:
     for record in ln.Record.filter(type=runs, is_type=False):
         values = record.features.get_values()
         if values.get("succeeded") is not True:
+            continue
+        if not matches_analysis_workload((record.run.params or {}) if record.run else {}):
             continue
         n_rows = as_int(values.get("n_rows"), f"{record.name} n_rows")
         stamp = str(values.get("started_at") or "")
