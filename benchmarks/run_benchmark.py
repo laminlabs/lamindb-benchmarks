@@ -109,6 +109,7 @@ def upload_measurements(
             description=item["description"],
             features=features,
             run=run,
+            skip_hash_lookup=True,
         ).save()
         artifacts.append(artifact)
         print(f"measurement: https://lamin.ai/{instance}/artifact/{artifact.uid}")
@@ -177,6 +178,18 @@ def main(argv: list[str] | None = None) -> None:
         run.name = name if "name" in params else run.uid
         run.save(update_fields=["name"])
         attach_git_provenance(run, provenance)
+        modal_runtime = {
+            key: os.environ[variable]
+            for key, variable in (
+                ("region", "MODAL_REGION"),
+                ("cloud_provider", "MODAL_CLOUD_PROVIDER"),
+                ("container_id", "MODAL_TASK_ID"),
+            )
+            if os.environ.get(variable)
+        }
+        if modal_runtime:
+            run.extra_data = {**(run.extra_data or {}), "modal": modal_runtime}
+            run.save(update_fields=["extra_data"])
         print(f"Git revision: {run.reference}")
         if provenance["dirty"]:
             print("[warn] benchmark checkout is dirty; the Git link shows the committed "

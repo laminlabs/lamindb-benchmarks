@@ -3,7 +3,7 @@
 from benchmarks.config import require_int
 from experiments.experiment_002.workload import workload_parameters
 
-DEFAULT_REPETITIONS = 3
+DEFAULT_REPETITIONS = 11
 DEFAULT_BATCH = 20
 
 

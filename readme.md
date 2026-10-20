@@ -107,6 +107,8 @@ Git references describe the checkout used when a new run starts. They do not use
 
 The Modal launcher uploads only `benchmarks/`, `experiments/`, `pyproject.toml`, and `uv.lock`, respecting `.gitignore` and excluding `.git` directories. It uses `requirements-modal.txt` to build the environment. Its local entrypoint captures the repository URL, commit, branch, dirty status, changed paths, and publication status for each launch, then passes that snapshot to the remote runner through `BENCHMARK_GIT_PROVENANCE`. Dependency versions are collected inside the remote environment. Local runs continue to read Git directly. Configs passed to Modal must be inside `benchmarks/` or `experiments/`.
 
+The Modal launcher pins compute to `eu-west` by default; pass `--region` to override it. Each remote invocation logs `MODAL_REGION` and `MODAL_CLOUD_PROVIDER`, and the benchmark run saves these plus its container ID in `run.extra_data["modal"]`. Keep the region, CPU, and memory settings constant across a size ladder. Experiment 002 uses 11 repetitions and lookup batch size 20 by default, saves timings for each insertion batch of up to 1,000 records, and runs `ANALYZE` after population before query timing.
+
 ## Setup and query
 
 Both connect to `LAMIN_LOAD_INSTANCE`, or `laminlabs/lamindb-load-test` when that is unset. Read parameters with `benchmarks.config.read_config` and `require_int`. The runner sets `BENCHMARK_CONFIG` to the file it was given.

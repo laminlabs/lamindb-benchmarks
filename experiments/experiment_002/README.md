@@ -12,6 +12,8 @@ Records and their features are saved in batches of 1,000, with each batch in a t
 
 The first repetition of each lookup is labeled the first call; this does not imply a cold database cache, since population and sampling have already accessed the database. Later repetitions use the same uids. The value recorded for a timed call is the number of rows that call returned. The insert is timed as well. Write events, auxiliary-table entries, disk space, cache hit ratio, and one EXPLAIN ANALYZE per lookup are captured during the run, because the load database is wiped between configs. A plan counts as an index scan only when every explained record or link statement used an index and none used a sequential scan.
 
+After population and insertion measurements finish, setup uses the load instance's root database connection to run `ANALYZE` on its public Lamin tables and write-event table. Query timing starts afterward in a separate process with the normal benchmark role. Statistics maintenance is excluded from insertion and lookup timings. A maintenance failure stops setup, preventing queries from running without the requested statistics refresh.
+
 Population and sampling use separate random generators with the same configured seed. Lookup candidates are ordered by name and uid before sampling. Each lookup artifact records the effective seed, catalog sizes, link ranges, and the exact sampled UIDs (as a JSON string in `sampled_uids`). A rerun generates new record UIDs but reproduces the synthetic feature values and selection positions for the same workload and seed.
 
 ## Queries
@@ -42,12 +44,15 @@ Each fact is one parquet. The runner uploads it under `benchmarks/measurements/e
 
 - `insert.parquet`: time to create the intervention records, the insert rate, and the write events produced by that insert.
 - `insert_batches.parquet`: one row per attempted batch, including batch size, cumulative successful records before/after, total batch latency, save-attempt time, retry wait time, attempt/retry counts, success status, and the last attempt's SQLSTATE. Written even if a batch fails. Total insert time is the sum of batch latencies (including row generation and retry waits), excluding serialization of these diagnostics. Overall retry and batch counts are also saved on `insert.parquet`.
+
 - `uid_lookup.parquet`: latency of each repetition of the uid-only lookup, and how many rows it returned.
 - `uid_with_features.parquet`: the same, for the single-record lookup that includes features.
 - `uid_batch_with_features.parquet`: the same, for the batch lookup that includes features.
 - `explain_uid_lookup.parquet`, `explain_uid_with_features.parquet`, `explain_uid_batch_with_features.parquet`: one replay after the timed calls. The parquet body includes `sql` (one captured lookup statement with its parameter values) and `explain_analyze` (the full JSON EXPLAIN ANALYZE output for all explained statements in that replay). Metadata holds the scan type, planning time, execution time, and a truncated plan. If capture fails and only the record-filter fallback is explained, `sql` is empty and `plan_source` is `record_filter`. Insert SQL is not captured.
 - `health.parquet`: write events, auxiliary-table entries, disk space, cache hit ratio, and active connections after the run.
 - `table_<name>.parquet`: row count, data size, index size, and bloat for one record-related table, or for the write-event table.
+
+For insertion cost as the database grows, plot `save_ms` or `latency_ms` against `records_before` in `insert_batches.parquet`. `save_ms` includes validation, database writes, transaction commit, and any failed save attempts; it excludes synthetic row generation, DataFrame construction, and retry waits. `latency_ms` includes all of those. These are client elapsed times, not server-only SQL times. Insert batches contain up to 1,000 interventions, independently of the lookup's `n_batch` setting. Compare equal-size batches or normalize by `batch_size` when including a smaller final batch. Catalog/schema setup and the later `ANALYZE` are excluded from both timers.
 
 Each timed lookup row also contains `sql_execute_count` and `sql_execute_ms`. These count Django cursor executions and time their execute calls, including network waits; they exclude fetching and Python/DataFrame processing. One cursor execution may contain multiple SQL statements, including an RLS token call. Lightweight counters run inside the latency timer, so their overhead is included. SQL text capture and EXPLAIN remain outside the timer.
 
@@ -97,7 +102,7 @@ python experiments/experiment_002/analyze_setup.py
 ## Parameters
 
 - `n_rows`: How many intervention records to create before timing the lookups. Integer, at least 1.
-- `n_repetitions`: How many times to time each lookup. Integer, at least 1. Defaults to 3 when omitted.
+- `n_repetitions`: How many times to time each lookup. Integer, at least 1. Defaults to 11 when omitted: one first call and ten subsequent repetitions.
 - `n_batch`: How many records the batch lookup fetches. Integer, at least 1. Defaults to 20 when omitted. If fewer records exist, the lookup uses all of them.
 - `random_seed`: Nonnegative integer used for population and lookup sampling. Defaults to 0.
 - `n_genes`: Total number of distinct genes in the catalog. Nonnegative integer; defaults to 100.

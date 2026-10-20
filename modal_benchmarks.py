@@ -1,7 +1,7 @@
 """Run a benchmark config on Modal using the project's locked Lamin release.
 
 Usage:
-    modal run --env Benchmarks modal_benchmarks.py --config experiments/experiment_002/config/n_rows_10.yml
+    modal run --env Benchmarks modal_benchmarks.py --config experiments/experiment_002/config/n_rows_100.yml --region eu-west
 
 Create the Modal secret lamin-benchmarks with LAMIN_API_KEY in the Benchmarks
 environment first.
@@ -9,6 +9,7 @@ This launcher does not reset the load database.
 Only benchmarks/, experiments/, pyproject.toml, and uv.lock are uploaded.
 Repository metadata is captured locally for each launch; .git is never uploaded.
 Config files must be under benchmarks/ or experiments/.
+The default compute region is eu-west; --region overrides it.
 
 After updating project dependencies, regenerate the remote environment with:
     uv export --frozen --no-dev --no-hashes --no-emit-project --output-file requirements-modal.txt
@@ -20,6 +21,7 @@ import modal
 
 ROOT = Path(__file__).resolve().parent
 REMOTE_ROOT = "/workspace/notion-benchmarking"
+DEFAULT_REGION = "eu-west"
 
 app = modal.App("notion-benchmarking")
 image = modal.Image.debian_slim(python_version="3.13")
@@ -59,6 +61,7 @@ if modal.is_local():
 
 @app.function(
     image=image,
+    region=DEFAULT_REGION,
     secrets=[modal.Secret.from_name("lamin-benchmarks")],
     cpu=1,
     memory=8192,
@@ -73,6 +76,10 @@ def run(config: str, git_provenance: dict):
     import sys
     import tempfile
 
+    print(
+        f"Modal region: {os.environ.get('MODAL_REGION', 'unknown')}; "
+        f"cloud provider: {os.environ.get('MODAL_CLOUD_PROVIDER', 'unknown')}"
+    )
     root = Path(REMOTE_ROOT)
     config_path = (root / config).resolve()
     if not config_path.is_relative_to(root):
@@ -94,7 +101,10 @@ def run(config: str, git_provenance: dict):
 
 
 @app.local_entrypoint()
-def main(config: str = "experiments/experiment_002/config/n_rows_10.yml"):
+def main(
+    config: str = "experiments/experiment_002/config/n_rows_100.yml",
+    region: str = DEFAULT_REGION,
+):
     from benchmarks.provenance import repository_provenance
 
     config_path = (ROOT / config).resolve()
@@ -106,4 +116,5 @@ def main(config: str = "experiments/experiment_002/config/n_rows_10.yml"):
     if not config_path.is_file():
         raise FileNotFoundError(config_path)
 
-    run.remote(config=relative_path.as_posix(), git_provenance=repository_provenance(ROOT))
+    function = run if region == DEFAULT_REGION else run.with_options(region=region)
+    function.remote(config=relative_path.as_posix(), git_provenance=repository_provenance(ROOT))

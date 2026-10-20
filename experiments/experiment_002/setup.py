@@ -53,7 +53,37 @@ def main() -> None:
     # ln.track(params={"n_rows": n_rows})
     created = create_interventions(n_rows, workload)
     print(f"setup created {created} intervention records")
+    analyze_populated_tables()
     # ln.finish()
+
+
+def analyze_populated_tables() -> None:
+    """Refresh planner statistics after insertion, outside all benchmark timers."""
+    # The JWT role used by the benchmark cannot analyze tables it does not own.
+    # Switch only after all inserts and their measurements have finished. The
+    # query stage starts in a fresh process using the normal benchmark role.
+    target = instance_from_env(LOAD_INSTANCE_ENV, LOAD_INSTANCE)
+    ln.connect(target, use_root_db_user=True)
+    import psycopg
+    from psycopg import sql
+
+    # Use a dedicated maintenance connection: switching database roles resets
+    # Django, so existing model/transaction objects must not be reused here.
+    with (
+        psycopg.connect(ln.setup.settings.instance.db, autocommit=True) as connection,
+        connection.cursor() as cursor,
+    ):
+        cursor.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND (tablename LIKE %s OR tablename = %s) ORDER BY tablename",
+            ("lamindb_%", "hubmodule_dbwrite"),
+        )
+        tables = [row[0] for row in cursor.fetchall()]
+        if not tables:
+            raise RuntimeError("No benchmark tables found for ANALYZE")
+        names = sql.SQL(", ").join(sql.Identifier("public", table) for table in tables)
+        cursor.execute(sql.SQL("ANALYZE {}").format(names))
+    print(f"ANALYZE completed for {len(tables)} load-instance tables")
 
 
 def create_interventions(n_rows: int, workload: dict[str, int]) -> int:

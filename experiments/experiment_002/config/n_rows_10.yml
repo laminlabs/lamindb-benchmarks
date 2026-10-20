@@ -1,5 +1,5 @@
 name: "Experiment 2: 10 records"
 experiment: experiments/experiment_002
 n_rows: 10
-n_repetitions: 10
+n_repetitions: 11
 n_batch: 20
