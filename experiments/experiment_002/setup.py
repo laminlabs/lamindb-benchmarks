@@ -41,8 +41,6 @@ MAX_BATCH_ATTEMPTS = 3
 # Serialization failure, deadlock, and lock timeout: safe to retry after rollback.
 RETRYABLE_SQLSTATES = {"40001", "40P01", "55P03"}
 SUPPLIERS = [f"supplier_{i:02d}" for i in range(10)]
-GENES = [f"gene_{i:03d}" for i in range(100)]
-MOLECULES = [f"mol_{i:02d}" for i in range(20)]
 PROTOCOLS = ["protocol_A", "protocol_B", "protocol_C", "protocol_D"]
 
 
@@ -59,7 +57,7 @@ def main() -> None:
 
 
 def create_interventions(n_rows: int, workload: dict[str, int]) -> int:
-    intervention, _, pools = ensure_intervention_sheet()
+    intervention, _, pools = ensure_intervention_sheet(workload)
     from observe import EVENTS_TABLE, count_rows
 
     before = count_rows(EVENTS_TABLE)
@@ -181,7 +179,9 @@ def _write_insert(
     )
 
 
-def ensure_intervention_sheet() -> tuple[ln.Record, dict[str, ln.Feature], dict]:
+def ensure_intervention_sheet(
+    workload: dict[str, int],
+) -> tuple[ln.Record, dict[str, ln.Feature], dict]:
     supplier_type = ensure_type("Supplier")
     gene_type = ensure_type("Gene")
     molecule_type = ensure_type("SmallMolecule")
@@ -204,8 +204,12 @@ def ensure_intervention_sheet() -> tuple[ln.Record, dict[str, ln.Feature], dict]
         intervention.save()
     pools = {
         "suppliers": ensure_pool(SUPPLIERS, supplier_type),
-        "genes": ensure_pool(GENES, gene_type),
-        "molecules": ensure_pool(MOLECULES, molecule_type),
+        "genes": ensure_pool(
+            [f"gene_{i:03d}" for i in range(workload["n_genes"])], gene_type,
+        ),
+        "molecules": ensure_pool(
+            [f"mol_{i:02d}" for i in range(workload["n_molecules"])], molecule_type,
+        ),
     }
     return intervention, features, pools
 

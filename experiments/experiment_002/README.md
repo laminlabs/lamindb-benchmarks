@@ -6,13 +6,13 @@ description: Intervention lookup and database growth as records are added
 
 Measures how long it takes to fetch intervention records by uid, with and without their features, after a controlled number of them have been created. It also records how that growth shows up in the database: write events, auxiliary tables, disk, insert rate, and whether each lookup plan used an index or a sequential scan.
 
-Each intervention is one treatment: a dose, a protocol, a treatment date and duration, one supplier, and links to a few genes and small molecules. The supplier, gene, and molecule catalogs stay fixed, so growth comes from the interventions, not from a larger catalog. By default an intervention links 3 to 5 of 100 genes and 1 to 3 of 20 molecules, and its supplier is one of 10. Link ranges are configurable to measure the effect of more relationships per record.
+Each intervention is one treatment: a dose, a protocol, a treatment date and duration, one supplier, and links to a few genes and small molecules. Catalog sizes stay fixed within each run. By default an intervention links 3 to 5 of 100 genes and 1 to 3 of 20 molecules, and its supplier is one of 10. Gene/molecule catalog sizes and per-record link ranges are configurable independently.
 
 Records and their features are saved in batches of 1,000, with each batch in a transaction. Serialization failures, deadlocks, and lock timeouts are retried up to three attempts, waiting 1 then 2 seconds after rollback. Other errors, including validation and connection errors, stop the experiment immediately. Exhausted retries also stop the experiment; there is no per-record fallback. Retry time is included in the insert measurement.
 
 The first repetition of each lookup is labeled the first call; this does not imply a cold database cache, since population and sampling have already accessed the database. Later repetitions use the same uids. The value recorded for a timed call is the number of rows that call returned. The insert is timed as well. Write events, auxiliary-table entries, disk space, cache hit ratio, and one EXPLAIN ANALYZE per lookup are captured during the run, because the load database is wiped between configs. A plan counts as an index scan only when every explained record or link statement used an index and none used a sequential scan.
 
-Population and sampling use separate random generators with the same configured seed. Lookup candidates are ordered by name and uid before sampling. Each lookup artifact records the effective seed, link ranges, and the exact sampled UIDs (as a JSON string in `sampled_uids`). A rerun generates new record UIDs but reproduces the synthetic feature values and selection positions for the same workload and seed.
+Population and sampling use separate random generators with the same configured seed. Lookup candidates are ordered by name and uid before sampling. Each lookup artifact records the effective seed, catalog sizes, link ranges, and the exact sampled UIDs (as a JSON string in `sampled_uids`). A rerun generates new record UIDs but reproduces the synthetic feature values and selection positions for the same workload and seed.
 
 ## Queries
 
@@ -55,7 +55,7 @@ EXPLAIN uses `ANALYZE, BUFFERS, FORMAT JSON`. Its metadata includes shared/local
 
 ## Analysis
 
-The analysis scripts compare one link-range workload at a time. By default they select the original 3–5 gene and 1–3 molecule ranges. Set `BENCHMARK_CONFIG` to a variant's config when analyzing that variant; other link ranges are excluded so they cannot be silently pooled or replace one another at the same record count. Seeds may differ across included runs. Newly generated summary tables use `latency_first_call_ms` and `first_call` instead of the previous cold-cache labels. Repetition counts and warm-summary calculations are unchanged.
+The analysis scripts compare one catalog-size/link-range workload at a time. By default they select 100 genes, 20 molecules, and the original 3–5 gene and 1–3 molecule ranges. Set `BENCHMARK_CONFIG` to a variant's config when analyzing that variant; other catalog sizes or link ranges are excluded so they cannot be silently pooled or replace one another at the same record count. Seeds may differ across included runs. Newly generated summary tables use `latency_first_call_ms` and `first_call` instead of the previous cold-cache labels. Repetition counts and warm-summary calculations are unchanged.
 
 Warm median latency. Error bars span the warm 5th to 95th percentile:
 
@@ -100,13 +100,19 @@ python experiments/experiment_002/analyze_setup.py
 - `n_repetitions`: How many times to time each lookup. Integer, at least 1. Defaults to 3 when omitted.
 - `n_batch`: How many records the batch lookup fetches. Integer, at least 1. Defaults to 20 when omitted. If fewer records exist, the lookup uses all of them.
 - `random_seed`: Nonnegative integer used for population and lookup sampling. Defaults to 0.
-- `genes_per_record_min`, `genes_per_record_max`: Inclusive link-count range, default 3 and 5. Require `0 <= min <= max <= 100`.
-- `small_molecules_per_record_min`, `small_molecules_per_record_max`: Inclusive link-count range, default 1 and 3. Require `0 <= min <= max <= 20`.
+- `n_genes`: Total number of distinct genes in the catalog. Nonnegative integer; defaults to 100.
+- `n_molecules`: Total number of distinct small molecules in the catalog. Nonnegative integer; defaults to 20.
+- `genes_per_record_min`, `genes_per_record_max`: Inclusive link-count range, default 3 and 5. Require `0 <= min <= max <= n_genes`.
+- `small_molecules_per_record_min`, `small_molecules_per_record_max`: Inclusive link-count range, default 1 and 3. Require `0 <= min <= max <= n_molecules`.
+
+Link-range defaults do not shrink automatically with the catalog. If a catalog is smaller than its default maximum, configure the link range too. An empty catalog requires both corresponding link bounds to be 0.
 
 For a denser workload, keep the same record counts and set, for example:
 
 ```yaml
 random_seed: 42
+n_genes: 500
+n_molecules: 50
 genes_per_record_min: 20
 genes_per_record_max: 20
 small_molecules_per_record_min: 10
