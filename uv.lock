@@ -182,30 +182,17 @@ wheels = [
 
 [[package]]
 name = "bionty"
-source = { editable = "../../laminlabs/lamindb/sub/bionty" }
+version = "2.5.2"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
     { name = "lamindb-core" },
     { name = "pyyaml" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "bioregistry", marker = "extra == 'dev'" },
-    { name = "cookiecutter", marker = "extra == 'dev'" },
-    { name = "httpx" },
-    { name = "jupytext", marker = "extra == 'dev'" },
-    { name = "laminci", marker = "extra == 'dev'" },
-    { name = "lamindb-core", specifier = ">=2.11a3" },
-    { name = "nbproject-test", marker = "extra == 'dev'" },
-    { name = "pre-commit", marker = "extra == 'dev'" },
-    { name = "pronto", marker = "extra == 'dev'" },
-    { name = "pymysql", marker = "extra == 'dev'" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=6.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'" },
-    { name = "pyyaml" },
+sdist = { url = "https://files.pythonhosted.org/packages/9a/f7/5e77257cf84c699a906d6c647f658379fdd38bfb93c4644452ff39a43593/bionty-2.5.2.tar.gz", hash = "sha256:b9639fbf8e8dd8eecb820d7c2495c896bb842ff3639261b697b9ead698bae295", size = 99043, upload-time = "2026-10-03T06:15:36.976Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7b/ba/4188c34d6aba7ce87544e75a985353886943379ba2c9cc2204772c2f0f98/bionty-2.5.2-py3-none-any.whl", hash = "sha256:cff359c1ef55322919bf42381de3b61132ac007d0a88b6906a885c7b28980c84", size = 87159, upload-time = "2026-10-03T06:15:35.059Z" },
 ]
-provides-extras = ["dev"]
 
 [[package]]
 name = "bleach"
@@ -948,39 +935,49 @@ wheels = [
 
 [[package]]
 name = "lamin-cli"
-source = { editable = "../../laminlabs/lamindb/sub/lamin-cli" }
+version = "1.21.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "lamindb-core" },
     { name = "rich-click" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "lamindb-core" },
-    { name = "rich-click", specifier = ">=1.7" },
+sdist = { url = "https://files.pythonhosted.org/packages/bd/fd/28a28be6ac7603c94a69e13a416f1185d4b17c4cba4b7fe61710b40a1b2c/lamin_cli-1.21.0.tar.gz", hash = "sha256:11be223e7a4ab41204f728ffd12d97820a95e0cb25cde7771034d220275af223", size = 179317, upload-time = "2026-10-18T22:39:52.378Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3f/cd/2873c4573878f16f4dd303e846679e56a3338746c69bce97688418057c34/lamin_cli-1.21.0-py2.py3-none-any.whl", hash = "sha256:984c28283eda9b98a4a59cf3859a4652da2d67e0f555cceb1b4b2de06065061c", size = 136444, upload-time = "2026-10-18T22:39:50.255Z" },
 ]
 
 [[package]]
 name = "lamin-utils"
-source = { editable = "../../laminlabs/lamin-utils" }
-
-[package.metadata]
-requires-dist = [
-    { name = "nbproject-test", marker = "extra == 'dev'" },
-    { name = "nox", marker = "extra == 'dev'" },
-    { name = "pandas", marker = "extra == 'dev'" },
-    { name = "pre-commit", marker = "extra == 'dev'" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=6.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'" },
+version = "0.16.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/4c/83/a9c69232d150341273892395a3889640144dc46c4642c9c44bd47f8885fe/lamin_utils-0.16.4.tar.gz", hash = "sha256:4bf183e011c12a0f2802229d45e8c4057d7d4cf4e41de0a153bc85e845a68f36", size = 35187, upload-time = "2026-02-26T07:51:33.988Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0a/d8/dd0d00f0171b7744b19e7eae5ebbbb73058f5953e74ae83444e009d24da5/lamin_utils-0.16.4-py2.py3-none-any.whl", hash = "sha256:b93477a3a12ed5591dcdbe3498997f81f2ea024d99710a93d0b7ee4208011348", size = 27152, upload-time = "2026-02-26T07:51:32.322Z" },
 ]
-provides-extras = ["dev"]
+
+[[package]]
+name = "lamindb"
+version = "2.12.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "lamindb-core", extra = ["full"] },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/57/aa/7e2969089f7d5d80c243f670b2238c33a6d8f8ad738ddccecc88c49225a8/lamindb-2.12.0.tar.gz", hash = "sha256:aee4b41c5124fcc905773443ad8983e9fc667ecfc4993a4cf56193536295dee4", size = 913147, upload-time = "2026-10-19T19:07:08.435Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2b/f6/48e0558abfb82a5909b01a649e6a018ff14ed4f501e8e31be78c7af94063/lamindb-2.12.0-py3-none-any.whl", hash = "sha256:edc03281435ddbae170c17ef35545cda8be50bdc7983f326e5416667aa8f270e", size = 12539, upload-time = "2026-10-19T19:07:06.08Z" },
+]
 
 [[package]]
 name = "lamindb-core"
-source = { editable = "../../laminlabs/lamindb" }
+version = "2.12.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "lamin-cli" },
     { name = "lamindb-setup", extra = ["aws"] },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3c/8a/682877f3fdcb26bd23e5247d4cf6be312151d26900f43a997192707122c3/lamindb_core-2.12.0.tar.gz", hash = "sha256:5633fcb8eac52d7f6bcfe431303a377687fd2fa82bb7022a1275cea892bac3e7", size = 991605, upload-time = "2026-10-19T19:07:03.237Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/00/a2/a7af86340137ddfe6a17ab493ddd38a7724e223551a1bdd556f50c2513d1/lamindb_core-2.12.0-py3-none-any.whl", hash = "sha256:f24d7113e1e7e1a438ffd6b0d53d814c58f00b9cc3823e15aeb8e2d48907ee1b", size = 697764, upload-time = "2026-10-19T19:07:00.598Z" },
 ]
 
 [package.optional-dependencies]
@@ -999,46 +996,10 @@ full = [
     { name = "typing-extensions" },
 ]
 
-[package.metadata]
-requires-dist = [
-    { name = "anndata", marker = "extra == 'full'", specifier = ">=0.10.0,<=0.13.2" },
-    { name = "bionty", marker = "extra == 'full'", specifier = ">=2.3.1,<3" },
-    { name = "coverage", marker = "extra == 'dev'" },
-    { name = "faker-biology", marker = "extra == 'dev'" },
-    { name = "graphviz", marker = "extra == 'full'" },
-    { name = "jupytext", marker = "extra == 'full'" },
-    { name = "lamin-cli", specifier = "==1.21.0" },
-    { name = "laminci", marker = "extra == 'dev'", specifier = ">=0.3" },
-    { name = "lamindb-setup", extras = ["aws"], specifier = "==1.27.0" },
-    { name = "lamindb-setup", extras = ["gcp"], marker = "extra == 'gcp'" },
-    { name = "line-profiler", marker = "extra == 'dev'" },
-    { name = "mudata", marker = "extra == 'dev'" },
-    { name = "nbconvert", marker = "extra == 'full'", specifier = ">=7.2.1" },
-    { name = "nbproject-test", marker = "extra == 'dev'", specifier = ">=0.6.0" },
-    { name = "nox", marker = "extra == 'dev'" },
-    { name = "numcodecs", marker = "extra == 'zarr-v2'", specifier = "<0.16.0" },
-    { name = "pandas", marker = "extra == 'full'", specifier = ">=2.0.0" },
-    { name = "pandera", marker = "extra == 'full'", specifier = ">=0.24.0" },
-    { name = "pandera", extras = ["pandas", "polars"], marker = "extra == 'polars'", specifier = ">=0.24.0" },
-    { name = "pertdb", marker = "extra == 'full'", specifier = ">=2.2.0,<3" },
-    { name = "polars", marker = "extra == 'polars'", specifier = ">=1.23" },
-    { name = "pre-commit", marker = "extra == 'dev'" },
-    { name = "pronto", marker = "extra == 'dev'" },
-    { name = "pyarrow", marker = "extra == 'full'" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=6.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = "<7.0.0" },
-    { name = "python-dateutil", marker = "extra == 'full'" },
-    { name = "pyyaml", marker = "extra == 'full'" },
-    { name = "readfcs", marker = "extra == 'fcs'" },
-    { name = "tomlkit", marker = "extra == 'dev'" },
-    { name = "typing-extensions", marker = "extra == 'full'", specifier = "!=4.6.0" },
-    { name = "zarr", marker = "extra == 'zarr-v2'", specifier = ">=2.16.0,<3.0.0a0" },
-]
-provides-extras = ["dev", "fcs", "full", "gcp", "polars", "zarr-v2"]
-
 [[package]]
 name = "lamindb-setup"
-source = { editable = "../../laminlabs/lamindb/sub/lamindb-setup" }
+version = "1.27.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "botocore" },
     { name = "dj-database-url" },
@@ -1056,6 +1017,10 @@ dependencies = [
     { name = "universal-pathlib" },
     { name = "websockets" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/f0/80/ff93c3d3c055f244b19c4f6330683496f4aa73a5cee0f4ffa590bcb46176/lamindb_setup-1.27.0.tar.gz", hash = "sha256:70e129ebd6584ee2c7dbda9d8983d11ce120b2b76e5fbeb0141b3da5f1337b6a", size = 268724, upload-time = "2026-10-18T22:39:10.751Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/02/f2/72d679f83cab640d0dd73761ae37d5225b7fc96ea83c30f19ad48433449a/lamindb_setup-1.27.0-py3-none-any.whl", hash = "sha256:855270c7384bd80fe951543e0ed81902f41cd5a77fc7bacc9d3d133beb06af84", size = 210720, upload-time = "2026-10-18T22:39:08.494Z" },
+]
 
 [package.optional-dependencies]
 aws = [
@@ -1063,40 +1028,6 @@ aws = [
     { name = "boto3" },
     { name = "s3fs" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiobotocore", extras = ["boto3"], marker = "extra == 'aws'", specifier = ">=2.12.4,<4.0.0" },
-    { name = "boto3", marker = "extra == 'aws'" },
-    { name = "botocore", specifier = "<2" },
-    { name = "dj-database-url", specifier = ">=1.3,<3" },
-    { name = "django", specifier = ">=5.2,<5.3" },
-    { name = "django-pgtrigger" },
-    { name = "django-schema-graph", marker = "extra == 'erdiagram'" },
-    { name = "gcsfs", marker = "extra == 'gcp'", specifier = ">=2023.12.2,<=2026.1.0" },
-    { name = "httpx-retries", specifier = "<1" },
-    { name = "jupytext", marker = "extra == 'dev'" },
-    { name = "line-profiler", marker = "extra == 'dev'" },
-    { name = "nbproject-test", marker = "extra == 'dev'", specifier = ">=0.4.3" },
-    { name = "nox", marker = "extra == 'dev'" },
-    { name = "packaging" },
-    { name = "pandas", marker = "extra == 'dev'" },
-    { name = "platformdirs", specifier = "<5" },
-    { name = "psutil" },
-    { name = "psycopg2-binary" },
-    { name = "psycopg2-binary", marker = "extra == 'dev'" },
-    { name = "pydantic" },
-    { name = "pyjwt", specifier = "<3.0.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=6.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = "<7.0.0" },
-    { name = "pytest-xdist", marker = "extra == 'dev'" },
-    { name = "python-dotenv" },
-    { name = "s3fs", marker = "extra == 'aws'", specifier = ">=2023.12.2,!=2024.10.0,<=2026.1.0" },
-    { name = "supabase", specifier = ">=2.20,<=2.24" },
-    { name = "universal-pathlib", specifier = "==0.3.10" },
-    { name = "websockets", specifier = ">=13.0" },
-]
-provides-extras = ["aws", "dev", "erdiagram", "gcp"]
 
 [[package]]
 name = "lance-namespace"
@@ -1430,7 +1361,7 @@ dependencies = [
     { name = "bionty" },
     { name = "lamin-cli" },
     { name = "lamin-utils" },
-    { name = "lamindb-core", extra = ["full"] },
+    { name = "lamindb" },
     { name = "lamindb-setup", extra = ["aws"] },
     { name = "matplotlib" },
     { name = "numpy" },
@@ -1462,18 +1393,18 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "bionty", editable = "../../laminlabs/lamindb/sub/bionty" },
+    { name = "bionty" },
     { name = "boto3", marker = "extra == 'lakehouse'", specifier = ">=1.34.0" },
     { name = "duckdb", marker = "extra == 'lakehouse'", specifier = ">=0.10.0" },
-    { name = "lamin-cli", editable = "../../laminlabs/lamindb/sub/lamin-cli" },
-    { name = "lamin-utils", editable = "../../laminlabs/lamin-utils" },
-    { name = "lamindb-core", extras = ["full"], editable = "../../laminlabs/lamindb" },
-    { name = "lamindb-setup", extras = ["aws"], editable = "../../laminlabs/lamindb/sub/lamindb-setup" },
+    { name = "lamin-cli" },
+    { name = "lamin-utils" },
+    { name = "lamindb", specifier = "==2.12.0" },
+    { name = "lamindb-setup", extras = ["aws"] },
     { name = "lancedb", marker = "extra == 'lakehouse'" },
     { name = "matplotlib", specifier = ">=3.8" },
     { name = "numpy" },
     { name = "pandas", specifier = ">=3.0" },
-    { name = "pertdb", editable = "../../laminlabs/lamindb/sub/pertdb" },
+    { name = "pertdb" },
     { name = "polars", marker = "extra == 'lakehouse'" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.1" },
     { name = "psycopg2-binary", specifier = ">=2.9.13" },
@@ -1744,23 +1675,16 @@ wheels = [
 
 [[package]]
 name = "pertdb"
-source = { editable = "../../laminlabs/lamindb/sub/pertdb" }
+version = "2.2.1"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bionty" },
     { name = "lamindb-core" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "bionty", specifier = ">=2.3a1,<3" },
-    { name = "lamindb-core", specifier = ">=2.11a3" },
-    { name = "nbproject-test", marker = "extra == 'dev'", specifier = ">=0.4.1" },
-    { name = "nox", marker = "extra == 'dev'" },
-    { name = "pre-commit", marker = "extra == 'dev'" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=6.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'" },
+sdist = { url = "https://files.pythonhosted.org/packages/57/e9/dbb6001058b3ed9e3d6115c3785c77665b8ce9b0b3de7cad2075efe0db45/pertdb-2.2.1.tar.gz", hash = "sha256:c40248ee833c49a3c2184a44a83fb38fdfc742a3944604af3fbad337513f1e5c", size = 17726, upload-time = "2026-10-03T06:19:58.862Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/19/4f/109cafb5d0207b02511b33b6e295541c4f49ef1f6cd2b70a5e72867c6900/pertdb-2.2.1-py2.py3-none-any.whl", hash = "sha256:79801d2ddd776b8d70ed7dfacfe97089913541180747422d79a73f275dbc0f7d", size = 11763, upload-time = "2026-10-03T06:19:57.347Z" },
 ]
-provides-extras = ["dev"]
 
 [[package]]
 name = "pillow"

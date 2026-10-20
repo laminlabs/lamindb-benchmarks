@@ -98,7 +98,7 @@ The runner allows uncommitted changes, untracked configs, and commits that have 
 
 Each run's `reference` is the repository URL pinned to its full HEAD commit SHA. Its transform's `reference` links to `benchmarks/run_benchmark.py` at that commit. `run.extra_data["git"]` stores the repository, commit, branch, config and experiment URLs, `dirty`, and a `changes` list covering staged, unstaged, and untracked files. `published` indicates whether local `origin` remote-tracking refs contain the commit; it does not query GitHub. A dirty checkout or unpublished commit is flagged in the run log. Git links show the committed baseline, so local changes and untracked files are not included, and links to unpublished commits may be unavailable until pushed. These local changes are not archived by this metadata.
 
-The metadata also records versions, Git commits, and dirty status of the six editable Lamin dependencies. A dirty dependency is flagged in the log and metadata. SSH origins are converted to browser URLs without including credentials.
+The project uses the published `lamindb==2.12.0` release. The metadata records versions of the six Lamin dependencies; if a dependency is installed as editable, it also records its Git commit and dirty status. A dirty dependency is flagged in the log and metadata. SSH origins are converted to browser URLs without including credentials. Modal installs the default project dependencies exported from `uv.lock` into `requirements-modal.txt`. Regenerate that file after dependency changes with `uv export --frozen --no-dev --no-hashes --no-emit-project --output-file requirements-modal.txt`.
 
 Git references describe the checkout used when a new run starts. They do not use a moving branch URL.
 

@@ -4,9 +4,7 @@ version = "0.1.0"
 description = "LaminDB load and lakehouse benchmarks"
 requires-python = ">=3.13,<3.14"
 dependencies = [
-    # The local checkout publishes lamindb-core; [full] supplies the same
-    # dependencies as the downloaded lamindb convenience package.
-    "lamindb-core[full]",
+    "lamindb==2.12.0",
     "lamindb-setup[aws]",
     "lamin-cli",
     "lamin-utils",
@@ -40,11 +38,3 @@ dev = ["ruff>=0.16"]
 [tool.uv]
 # This repository contains runnable scripts and notebooks, not a Python package.
 package = false
-
-[tool.uv.sources]
-lamindb-core = { path = "../../laminlabs/lamindb", editable = true }
-lamindb-setup = { path = "../../laminlabs/lamindb/sub/lamindb-setup", editable = true }
-lamin-cli = { path = "../../laminlabs/lamindb/sub/lamin-cli", editable = true }
-lamin-utils = { path = "../../laminlabs/lamin-utils", editable = true }
-bionty = { path = "../../laminlabs/lamindb/sub/bionty", editable = true }
-pertdb = { path = "../../laminlabs/lamindb/sub/pertdb", editable = true }
