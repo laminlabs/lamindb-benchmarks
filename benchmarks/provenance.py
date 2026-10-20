@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import importlib.metadata
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
+
+GIT_PROVENANCE_ENV = "BENCHMARK_GIT_PROVENANCE"
 
 
 def _git(directory: Path, *args: str, optional: bool = False) -> str:
@@ -58,6 +61,39 @@ def git_revision(directory: Path, *, paths: list[str] | None = None) -> dict:
     }
 
 
+def repository_provenance(root: Path) -> dict:
+    """Capture repository metadata locally, without uploading Git history."""
+    revision = git_revision(root)
+    revision["published"] = bool(
+        _git(root, "for-each-ref", "--format=%(refname)",
+             "--contains", revision["commit"], "refs/remotes/origin")
+    )
+    return revision
+
+
+def _repository_provenance(root: Path) -> dict:
+    snapshot_path = os.environ.get(GIT_PROVENANCE_ENV, "").strip()
+    if not snapshot_path:
+        return repository_provenance(root)
+    try:
+        revision = json.loads(Path(snapshot_path).read_text())
+    except (OSError, ValueError) as error:
+        raise ValueError("Cannot read the supplied Git provenance snapshot") from error
+    fields = {
+        "repository": str, "commit": str, "url": str,
+        "dirty": bool, "changes": list, "published": bool,
+    }
+    if not isinstance(revision, dict) or any(
+        not isinstance(revision.get(key), dtype) for key, dtype in fields.items()
+    ):
+        raise ValueError("Invalid Git provenance snapshot")
+    if revision.get("branch") is not None and not isinstance(revision["branch"], str):
+        raise ValueError("Invalid Git provenance snapshot branch")
+    if not all(isinstance(change, str) for change in revision["changes"]):
+        raise ValueError("Invalid Git provenance snapshot changes")
+    return revision
+
+
 def editable_dependencies() -> dict:
     """The lockfile's editable paths alone do not identify their source revisions."""
     packages = {}
@@ -86,14 +122,11 @@ def benchmark_provenance(root: Path, experiment: Path, config: Path) -> dict:
                      f"{experiment_path}/query.py", config_path, "pyproject.toml", "uv.lock"):
         if not (root / required).is_file():
             raise ValueError(f"Required benchmark file is missing: {required}")
-    revision = git_revision(root)
-    published = _git(root, "for-each-ref", "--format=%(refname)",
-                     "--contains", revision["commit"], "refs/remotes/origin")
+    revision = _repository_provenance(root)
     base = revision["repository"]
     blob = f"{base}/blob/{revision['commit']}"
     dependencies = editable_dependencies()
     revision.update({
-        "published": bool(published),
         "experiment_path": experiment_path,
         "experiment_url": f"{revision['url']}/{quote(experiment_path, safe='/')}",
         "config_path": config_path,

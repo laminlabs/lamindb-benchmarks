@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
 import yaml
@@ -48,6 +49,25 @@ def instance_from_env(env_name: str, default: str) -> str:
     """Instance slug from the environment, or the code default when unset."""
     value = os.environ.get(env_name, "").strip()
     return value or default
+
+
+def resolve_parameters(experiment: Path, params: dict) -> dict:
+    """Apply an experiment's optional parameter resolver before tracking."""
+    path = experiment / "parameters.py"
+    if not path.is_file():
+        return params.copy()
+    spec = spec_from_file_location(f"_benchmark_parameters_{experiment.name}", path)
+    if spec is None or spec.loader is None:
+        sys.exit(f"cannot load experiment parameters: {path}")
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    resolver = getattr(module, "resolve_parameters", None)
+    if not callable(resolver):
+        sys.exit(f"{path} must define resolve_parameters(params)")
+    resolved = resolver(params.copy())
+    if not isinstance(resolved, dict):
+        sys.exit(f"{path}: resolve_parameters must return a mapping")
+    return resolved
 
 
 def require_str(params: dict, key: str, default: str | None = None) -> str:

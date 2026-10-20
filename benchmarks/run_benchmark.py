@@ -1,7 +1,8 @@
 """Connect to the benchmark instance, track parameters, and run an experiment.
 
 Parameters come from an optional config path, BENCHMARK_CONFIG, or ./config.yml.
-Every key is passed to ln.track(params=...). The file itself is not uploaded.
+An experiment's optional parameters.py resolves defaults before every key is
+passed to ln.track(params=...). The config file itself is not uploaded.
 The benchmark instance is LAMIN_CURRENT_INSTANCE or laminlabs/lamindb-benchmarks.
 experiment is a folder containing setup.py and query.py. They are launched in
 separate processes, setup first, and are not run-record columns. Each child
@@ -29,8 +30,11 @@ from benchmarks.config import (
     BENCHMARK_INSTANCE,
     BENCHMARK_INSTANCE_ENV,
     CONFIG_ENV,
+    LOAD_INSTANCE,
+    LOAD_INSTANCE_ENV,
     instance_from_env,
     read_config,
+    resolve_parameters,
     run_name,
 )
 from benchmarks.experiment import (
@@ -147,8 +151,9 @@ def track_experiment(experiment: Path, params: dict) -> None:
 def main(argv: list[str] | None = None) -> None:
     config_path = _config_path(argv)
     params = read_config(config_path)
-    name = run_name(params, default="benchmark")
     experiment = _experiment(params)
+    params = resolve_parameters(experiment, params)
+    name = run_name(params, default="benchmark")
     try:
         provenance = benchmark_provenance(_ROOT, experiment, config_path)
     except (ValueError, RuntimeError) as error:
@@ -158,6 +163,9 @@ def main(argv: list[str] | None = None) -> None:
     child_env = os.environ.copy()
     child_env.pop("LAMIN_INITIATED_BY_RUN_UID", None)
     child_env[CONFIG_ENV] = str(config_path)
+    # Import Lamin on the stage's own instance so Django's transaction module
+    # does not retain stale settings after an instance switch.
+    child_env[BENCHMARK_INSTANCE_ENV] = instance_from_env(LOAD_INSTANCE_ENV, LOAD_INSTANCE)
 
     exit_code = 1
     ln.connect(instance)

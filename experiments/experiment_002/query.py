@@ -26,6 +26,7 @@ for _path in (_ROOT, _HERE):
 
 import lamindb as ln
 from observe import BUFFER_FIELDS, explain_lookup, profile_lookup
+from parameters import DEFAULT_BATCH, DEFAULT_REPETITIONS
 from workload import workload_parameters
 
 from benchmarks.config import (
@@ -39,8 +40,6 @@ from benchmarks.measurements import load_measurements, results_dir, write_measur
 from benchmarks.timing import rows_from_timed, time_calls
 
 NAME_PREFIX = Path(__file__).resolve().parent.name
-DEFAULT_REPETITIONS = 3
-DEFAULT_BATCH = 20
 LOOKUPS = (
     ("uid_lookup", False),
     ("uid_with_features", False),

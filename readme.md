@@ -32,6 +32,7 @@ Optional, and not launched by the runner:
 - `config/*.yml`
 - `analyze.py` and other `analyze_*.py` scripts
 - helpers such as `observe.py`, imported by `setup.py` or `query.py`
+- `parameters.py` with `resolve_parameters(params) -> dict`, a pure function that fills and validates defaults before tracking. The resolved values are saved in both the Lamin run parameters and its run-sheet row.
 
 The runner starts each script by path, so the experiment folder is not on `sys.path`. A script that imports a sibling must insert its own directory. Use the folder name as the name prefix for records this experiment creates. Do not hardcode `experiment_001` or `experiment_002` in shared code.
 
@@ -73,6 +74,8 @@ n_repetitions: 3
 
 `experiment` is a folder path, resolved from the working directory, not from the YAML file's directory. It is not a run-sheet column.
 
+Experiments with `parameters.py` record effective parameter values, including defaults omitted from YAML. Experiment 002 resolves its gene and molecule catalog sizes and link ranges, random seed, repetition count, and lookup batch size from the same defaults used by setup and queries.
+
 `name` is the display name of both the Lamin run and its run record. It must be a non-empty string of at most 150 characters. Older configs without it fall back to the run uid. Repeated executions may share a display name; their run uids and run records remain distinct. The run sheet uses `name` as its display index and stores the execution uid separately in `run_uid`. The record explicitly links both its run and the run's transform, so they appear as attachments. Existing run-uid indexes are migrated without discarding the old uid values.
 
 Run and analysis sheets store `started_at` with feature dtype `datetime`, as timezone-naive UTC for Hub rendering. Offset-aware start times are converted to UTC before the timezone is removed.
@@ -101,6 +104,8 @@ Each run's `reference` is the repository URL pinned to its full HEAD commit SHA.
 The project uses the published `lamindb==2.12.0` release. The metadata records versions of the six Lamin dependencies; if a dependency is installed as editable, it also records its Git commit and dirty status. A dirty dependency is flagged in the log and metadata. SSH origins are converted to browser URLs without including credentials. Modal installs the default project dependencies exported from `uv.lock` into `requirements-modal.txt`. Regenerate that file after dependency changes with `uv export --frozen --no-dev --no-hashes --no-emit-project --output-file requirements-modal.txt`.
 
 Git references describe the checkout used when a new run starts. They do not use a moving branch URL.
+
+The Modal launcher uploads only `benchmarks/`, `experiments/`, `pyproject.toml`, and `uv.lock`, respecting `.gitignore` and excluding `.git` directories. It uses `requirements-modal.txt` to build the environment. Its local entrypoint captures the repository URL, commit, branch, dirty status, changed paths, and publication status for each launch, then passes that snapshot to the remote runner through `BENCHMARK_GIT_PROVENANCE`. Dependency versions are collected inside the remote environment. Local runs continue to read Git directly. Configs passed to Modal must be inside `benchmarks/` or `experiments/`.
 
 ## Setup and query
 
