@@ -111,6 +111,7 @@ httpx==0.28.1
     # via
     #   bionty
     #   httpx-retries
+    #   notion-benchmarking
     #   postgrest
     #   storage3
     #   supabase

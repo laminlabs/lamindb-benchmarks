@@ -1,0 +1,8 @@
+name: "Notion: 100 interventions"
+experiment: experiments/experiment_005
+n_rows: 100
+existing_rows: 0
+n_repetitions: 11
+n_batch: 20
+insert_batch_size: 1000
+notion_requests_per_second: 3
