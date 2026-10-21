@@ -5,6 +5,9 @@ Usage:
 
 Create the Modal secret lamin-benchmarks with LAMIN_API_KEY in the Benchmarks
 environment first.
+For Notion, pass --notion-secret notion-benchmarks to mount NOTION_API_KEY and,
+optionally, NOTION_PARENT_PAGE_ID or NOTION_DATASET_PAGE_ID. The secret is only
+mounted when this option is supplied; other experiments do not need it.
 This launcher does not reset the load database.
 Only benchmarks/, experiments/, pyproject.toml, and uv.lock are uploaded.
 Repository metadata is captured locally for each launch; .git is never uploaded.
@@ -104,6 +107,7 @@ def run(config: str, git_provenance: dict):
 def main(
     config: str = "experiments/experiment_002/config/n_rows_100.yml",
     region: str = DEFAULT_REGION,
+    notion_secret: str = "",
 ):
     from benchmarks.provenance import repository_provenance
 
@@ -116,5 +120,10 @@ def main(
     if not config_path.is_file():
         raise FileNotFoundError(config_path)
 
-    function = run if region == DEFAULT_REGION else run.with_options(region=region)
+    options = {}
+    if region != DEFAULT_REGION:
+        options["region"] = region
+    if notion_secret:
+        options["secrets"] = [modal.Secret.from_name("lamin-benchmarks"), modal.Secret.from_name(notion_secret)]
+    function = run.with_options(**options) if options else run
     function.remote(config=relative_path.as_posix(), git_provenance=repository_provenance(ROOT))
