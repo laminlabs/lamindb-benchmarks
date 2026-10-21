@@ -47,11 +47,14 @@ PROTOCOLS = ["protocol_A", "protocol_B", "protocol_C", "protocol_D"]
 def main() -> None:
     params = read_config()
     n_rows = require_int(params, "n_rows", minimum=1)
+    existing_rows = require_int(params, "existing_rows", minimum=0, default=0)
+    if existing_rows > n_rows:
+        sys.exit("existing_rows must not exceed n_rows")
     workload = workload_parameters(params)
     ln.connect(instance_from_env(LOAD_INSTANCE_ENV, LOAD_INSTANCE))
     # Load-instance finish fails while its Storage row is missing.
     # ln.track(params={"n_rows": n_rows})
-    created = create_interventions(n_rows, workload)
+    created = create_interventions(n_rows, workload, existing_rows=existing_rows)
     print(f"setup created {created} intervention records")
     analyze_populated_tables()
     # ln.finish()
@@ -86,17 +89,33 @@ def analyze_populated_tables() -> None:
     print(f"ANALYZE completed for {len(tables)} load-instance tables")
 
 
-def create_interventions(n_rows: int, workload: dict[str, int]) -> int:
+def create_interventions(
+    n_rows: int, workload: dict[str, int], *, existing_rows: int = 0,
+) -> int:
     intervention, _, pools = ensure_intervention_sheet(workload)
     from observe import EVENTS_TABLE, count_rows
 
+    def intervention_count() -> int:
+        return ln.Record.filter(
+            type=intervention, is_type=False, name__startswith=f"{NAME_PREFIX}_",
+        ).count()
+
+    if existing_rows:
+        actual = intervention_count()
+        if actual != existing_rows:
+            sys.exit(f"Resume expected {existing_rows} existing interventions, found {actual}")
+        print(f"Resuming: {existing_rows} existing, inserting {n_rows - existing_rows}, target {n_rows}")
     before = count_rows(EVENTS_TABLE)
     batches = []
-    created = _insert_rows(intervention, pools, n_rows, workload, batches)
+    created = _insert_rows(
+        intervention, pools, n_rows, workload, batches, existing_rows=existing_rows,
+    )
+    if existing_rows and intervention_count() != n_rows:
+        raise RuntimeError(f"Resumed population did not reach {n_rows} interventions")
     # Exclude serializing the batch diagnostics from population throughput.
     elapsed = sum(batch["latency_ms"] for batch in batches) / 1000
     after = count_rows(EVENTS_TABLE)
-    _write_insert(n_rows, created, elapsed, before, after, workload, batches)
+    _write_insert(n_rows, created, elapsed, before, after, workload, batches, existing_rows=existing_rows)
     return created
 
 
@@ -106,16 +125,21 @@ def _insert_rows(
     n_rows: int,
     workload: dict[str, int],
     batches: list[dict],
+    *,
+    existing_rows: int = 0,
 ) -> int:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     rng = random.Random(workload["random_seed"])
+    # Continue the original random sequence, outside the measured insert time.
+    for _ in range(existing_rows):
+        _row(pools, "", rng, workload)
     created = 0
     try:
-        while created < n_rows:
-            count = min(BATCH_SIZE, n_rows - created)
+        while created < n_rows - existing_rows:
+            count = min(BATCH_SIZE, n_rows - existing_rows - created)
             batch_started = time.perf_counter()
             rows = [
-                _row(pools, f"{NAME_PREFIX}_{stamp}_{created + offset:05d}", rng, workload)
+                _row(pools, f"{NAME_PREFIX}_{stamp}_{existing_rows + created + offset:05d}", rng, workload)
                 for offset in range(count)
             ]
             attempts = []
@@ -131,8 +155,8 @@ def _insert_rows(
                     "value": count if succeeded else 0,
                     "batch_index": len(batches) + 1,
                     "batch_size": count,
-                    "records_before": created,
-                    "records_after": created + count if succeeded else created,
+                    "records_before": existing_rows + created,
+                    "records_after": existing_rows + created + (count if succeeded else 0),
                     "retry_count": max(len(attempts) - 1, 0),
                     "attempt_count": len(attempts),
                     "save_ms": round(sum(a["save_ms"] for a in attempts), 3),
@@ -153,6 +177,7 @@ def _insert_rows(
                     "measurement_kind": "insert_batches",
                     "query_name": "insert_batches",
                     "n_rows": n_rows,
+                    "existing_rows": existing_rows,
                     "batch_size": BATCH_SIZE,
                     "insert_retry_count": sum(b["retry_count"] for b in batches),
                     **workload,
@@ -169,12 +194,15 @@ def _write_insert(
     after: int | None,
     workload: dict[str, int],
     batches: list[dict],
+    *,
+    existing_rows: int = 0,
 ) -> None:
     features: dict = {
         "measurement_kind": "insert",
         "query_name": "insert",
         "name_prefix": f"{NAME_PREFIX}_",
         "n_rows": n_rows,
+        "existing_rows": existing_rows,
         "n_records": created,
         "insert_seconds": round(elapsed, 6),
         "insert_retry_count": sum(b["retry_count"] for b in batches),

@@ -1,0 +1,6 @@
+name: "Experiment 2: add 2,000 records to 500,000 existing"
+experiment: experiments/experiment_002
+n_rows: 502000
+existing_rows: 500000
+n_repetitions: 11
+n_batch: 20

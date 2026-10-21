@@ -1,0 +1,6 @@
+name: "Experiment 2: 1,000,000 records (resumed)"
+experiment: experiments/experiment_002
+n_rows: 1000000
+existing_rows: 842000
+n_repetitions: 11
+n_batch: 20
