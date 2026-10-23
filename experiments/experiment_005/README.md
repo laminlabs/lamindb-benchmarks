@@ -52,7 +52,7 @@ In workspace `alex-76941`, environment `Benchmarks`, keep the existing
 and `NOTION_PARENT_PAGE_ID`:
 
 ```sh
-modal run --detach --profile alex-76941 --env Benchmarks modal_benchmarks.py \
+modal run --detach --profile alex-76941 --env Benchmarks benchmarks/modal_benchmarks.py \
   --config experiments/experiment_005/example.yml --region eu-west \
   --notion-secret notion-benchmarks
 ```

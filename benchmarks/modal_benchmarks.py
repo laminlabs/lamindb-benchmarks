@@ -1,7 +1,7 @@
 """Run a benchmark config on Modal using the project's locked Lamin release.
 
 Usage:
-    modal run --env Benchmarks modal_benchmarks.py --config experiments/experiment_002/example.yml --region eu-west
+    modal run --env Benchmarks benchmarks/modal_benchmarks.py --config experiments/experiment_002/example.yml --region eu-west
 
 Create the Modal secret lamin-benchmarks with LAMIN_API_KEY in the Benchmarks
 environment first.
@@ -19,11 +19,14 @@ After updating project dependencies, regenerate the remote environment with:
     uv export --frozen --no-dev --no-hashes --no-emit-project --output-file requirements-modal.txt
 """
 
+import sys
 from pathlib import Path
 
 import modal
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 REMOTE_ROOT = "/workspace/notion-benchmarking"
 DEFAULT_REGION = "eu-west"
 
