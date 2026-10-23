@@ -35,7 +35,7 @@ environment, then run:
 
 ```sh
 LAMIN_CURRENT_INSTANCE=laminlabs/lamindb-benchmarks \
-  uv run python benchmarks/run_benchmark.py experiments/experiment_005/config/n_rows_100.yml
+  uv run python benchmarks/run_benchmark.py experiments/experiment_005/example.yml
 ```
 
 The runner resolves defaults, starts an independent experiment_005 Lamin run,
@@ -53,7 +53,7 @@ and `NOTION_PARENT_PAGE_ID`:
 
 ```sh
 modal run --detach --profile alex-76941 --env Benchmarks modal_benchmarks.py \
-  --config experiments/experiment_005/config/n_rows_100.yml --region eu-west \
+  --config experiments/experiment_005/example.yml --region eu-west \
   --notion-secret notion-benchmarks
 ```
 

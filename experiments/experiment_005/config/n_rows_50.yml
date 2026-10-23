@@ -1,9 +1,0 @@
-name: "Notion: 50 interventions"
-experiment: experiments/experiment_005
-n_rows: 50
-existing_rows: 0
-notion_parent_page_id: "400df0e2-912c-8064-b6f4-cb43c73a41da"
-n_repetitions: 11
-n_batch: 20
-insert_batch_size: 1000
-notion_requests_per_second: 3

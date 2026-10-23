@@ -1,6 +1,0 @@
-name: "Experiment 2: add 2,000 records to 200,000 existing"
-experiment: experiments/experiment_002
-n_rows: 202000
-existing_rows: 200000
-n_repetitions: 11
-n_batch: 20

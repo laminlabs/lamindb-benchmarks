@@ -1,4 +1,0 @@
-name: "Experiment 3: 10,000 records"
-experiment: experiments/experiment_003
-n_rows: 10000
-n_repetitions: 11

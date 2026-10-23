@@ -17,3 +17,6 @@ htmlcov/
 
 # macOS
 .DS_Store
+
+# Local benchmark configuration
+/config.yml

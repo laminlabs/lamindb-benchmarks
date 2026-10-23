@@ -7,14 +7,14 @@ Two LaminDB instances, two processes. Do not combine them with `.using()`.
 
 `benchmarks/` is the generic runner. A new experiment is a new folder under `experiments/`. Do not edit `benchmarks/` to name that experiment, add its queries, or special-case its plots. If the contract below cannot express the measurement, stop and ask before changing the runner.
 
-`experiments/experiment_001` is the small example: create plain records, time one count. `experiments/experiment_002` is the fuller example: typed records, several lookups, and facts captured during the run. `archive/` is the old study. Do not copy it into `benchmarks/`. `configs/` and `config.yml` belong to experiment 001. Do not put a new experiment there.
+`experiments/experiment_001` is the small example: create plain records, time one count. `experiments/experiment_002` is the fuller example: typed records, several lookups, and facts captured during the run. `archive/` is the old study. Do not copy it into `benchmarks/`. Each experiment has a minimal tracked `example.yml`. Run-specific configs stay local in its ignored `config/` folder. Legacy root `configs/` and `config.yml` are also local and ignored.
 
 Run every command from the repository root, with the project interpreter that already has lamindb. Do not start a temporary environment.
 
 ## Add an experiment
 
 1. Create `experiments/<name>/` with `README.md`, `setup.py`, and `query.py`. The folder name becomes the Lamin record name. Do not rename it after the first sync.
-2. Put configs in `experiments/<name>/config/`. One YAML file per point on the ladder.
+2. Add a minimal `experiments/<name>/example.yml`. Put local configs in `experiments/<name>/config/`, with a `.gitignore` containing `*` and `!.gitignore`. Copy the example and change `n_rows` for each point on the ladder.
 3. Run one config with `python benchmarks/run_benchmark.py experiments/<name>/config/<file>.yml`. That syncs the page, runs setup, then query, and uploads measurements.
 4. For a ladder, `python benchmarks/batch_benchmarks.py --yes experiments/<name>/config`.
 5. After succeeded runs exist, add analysis scripts in the same folder and run them yourself. The runner does not look for them.
@@ -29,7 +29,8 @@ Required:
 
 Optional, and not launched by the runner:
 
-- `config/*.yml`
+- `example.yml`, a minimal tracked config
+- `config/.gitignore`, keeping run-specific `config/*.yml` local
 - `analyze.py` and other `analyze_*.py` scripts
 - helpers such as `observe.py`, imported by `setup.py` or `query.py`
 - `parameters.py` with `resolve_parameters(params) -> dict`, a pure function that fills and validates defaults before tracking. The resolved values are saved in both the Lamin run parameters and its run-sheet row.
@@ -64,6 +65,17 @@ python benchmarks/experiment.py experiments/my_experiment
 That command does not touch the load instance. It still reads `./config.yml`, or `BENCHMARK_CONFIG` when set, so the runs sheet gets parameter columns. A benchmark run syncs the same page from the config it was given, so a separate sync is optional.
 
 ## Config
+
+Run a tracked example directly, or copy it into the experiment's ignored config folder:
+
+```sh
+python benchmarks/run_benchmark.py experiments/experiment_002/example.yml
+
+cp experiments/experiment_002/example.yml experiments/experiment_002/config/my_run.yml
+python benchmarks/run_benchmark.py experiments/experiment_002/config/my_run.yml
+```
+
+Git stores the example and each folder's `.gitignore`, not the individual run configs. Existing local configs can still be used. On a fresh checkout, pass an example or a local config explicitly; the optional `./config.yml` fallback is not tracked.
 
 ```yaml
 name: "My experiment: 10 records"
@@ -105,7 +117,7 @@ The project uses the published `lamindb==2.12.0` release. The metadata records v
 
 Git references describe the checkout used when a new run starts. They do not use a moving branch URL.
 
-The Modal launcher uploads only `benchmarks/`, `experiments/`, `pyproject.toml`, and `uv.lock`, respecting `.gitignore` and excluding `.git` directories. It uses `requirements-modal.txt` to build the environment. Its local entrypoint captures the repository URL, commit, branch, dirty status, changed paths, and publication status for each launch, then passes that snapshot to the remote runner through `BENCHMARK_GIT_PROVENANCE`. Dependency versions are collected inside the remote environment. Local runs continue to read Git directly. Configs passed to Modal must be inside `benchmarks/` or `experiments/`.
+The Modal launcher uploads only `benchmarks/`, `experiments/`, `pyproject.toml`, and `uv.lock`, respecting the root `.gitignore` and excluding `.git` directories and local `config/` and `configs/` folders. It explicitly adds the selected config when it is in one of those folders. It uses `requirements-modal.txt` to build the environment. Its local entrypoint captures the repository URL, commit, branch, dirty status, changed paths, and publication status for each launch, then passes that snapshot to the remote runner through `BENCHMARK_GIT_PROVENANCE`. Dependency versions are collected inside the remote environment. Local runs continue to read Git directly. Configs passed to Modal must be inside `benchmarks/` or `experiments/`.
 
 The Modal launcher pins compute to `eu-west` by default; pass `--region` to override it. Each remote invocation logs `MODAL_REGION` and `MODAL_CLOUD_PROVIDER`, and the benchmark run saves these plus its container ID in `run.extra_data["modal"]`. Keep the region, CPU, and memory settings constant across a size ladder. Experiment 002 uses 11 repetitions and lookup batch size 20 by default, saves timings for each insertion batch of up to 1,000 records, and runs `ANALYZE` after population before query timing.
 

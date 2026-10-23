@@ -1,7 +1,7 @@
 """Run a benchmark config on Modal using the project's locked Lamin release.
 
 Usage:
-    modal run --env Benchmarks modal_benchmarks.py --config experiments/experiment_002/config/n_rows_100.yml --region eu-west
+    modal run --env Benchmarks modal_benchmarks.py --config experiments/experiment_002/example.yml --region eu-west
 
 Create the Modal secret lamin-benchmarks with LAMIN_API_KEY in the Benchmarks
 environment first.
@@ -12,6 +12,7 @@ This launcher does not reset the load database.
 Only benchmarks/, experiments/, pyproject.toml, and uv.lock are uploaded.
 Repository metadata is captured locally for each launch; .git is never uploaded.
 Config files must be under benchmarks/ or experiments/.
+Local config/ and configs/ folders are excluded except for the selected config.
 The default compute region is eu-west; --region overrides it.
 
 After updating project dependencies, regenerate the remote environment with:
@@ -37,6 +38,8 @@ if modal.is_local():
         "**/.env.*",
         "**/.venv",
         "**/__pycache__",
+        "**/config/**",
+        "**/configs/**",
     )
     image = (
         image.pip_install_from_requirements(str(ROOT / "requirements-modal.txt"))
@@ -105,7 +108,7 @@ def run(config: str, git_provenance: dict):
 
 @app.local_entrypoint()
 def main(
-    config: str = "experiments/experiment_002/config/n_rows_100.yml",
+    config: str = "experiments/experiment_002/example.yml",
     region: str = DEFAULT_REGION,
     notion_secret: str = "",
 ):
@@ -121,6 +124,10 @@ def main(
         raise FileNotFoundError(config_path)
 
     options = {}
+    if any(part in {"config", "configs"} for part in relative_path.parts[:-1]):
+        options["image"] = image.add_local_file(
+            config_path, f"{REMOTE_ROOT}/{relative_path.as_posix()}",
+        )
     if region != DEFAULT_REGION:
         options["region"] = region
     if notion_secret:
