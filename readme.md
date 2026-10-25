@@ -287,6 +287,57 @@ other experiments are unchanged. Omitted parameters do not delete historical
 columns. Analyses support both historical run-linked artifacts and newer
 observation-linked tables, including completed observations from failed runs.
 
+### Analysis conventions
+
+Keep analysis scripts in an `analyses/` directory inside their experiment.
+This is the recommended layout: the experiment root holds workload and measurement
+code, while `analyses/` holds separately invoked analyses and shared analysis helpers.
+For example:
+
+```text
+experiments/my_experiment/
+├── README.md
+├── run.py
+├── example.yml
+├── config/
+│   └── .gitignore
+└── analyses/
+    ├── __init__.py
+    ├── common.py
+    └── query_latency.py
+```
+
+Run an analysis explicitly from the repository root, for example:
+
+```sh
+uv run python experiments/record_scalability/analyses/query_latency.py RUN_RECORD_UID
+```
+
+Keep imports free of database connections, tracking calls and analysis execution;
+start those only inside the explicit entry point. The experiment runner does not
+automatically execute scripts in `analyses/`.
+
+For an analysis of one benchmark execution, use a Transform key in this form:
+
+```text
+benchmarks/experiments/<experiment_name>/<source_run_uid>/<analysis_name>
+```
+
+Here `source_run_uid` is the benchmark's Lamin Run UID, rather than its run
+Record UID or the new analysis execution's UID. For example:
+`benchmarks/experiments/record_scalability/<source_run_uid>/query_latency`.
+Keep a separate transform version family for each key, even when different
+source executions use identical analysis code. Repeating an analysis creates
+a new analysis Run within that family.
+
+Make provenance easy to navigate from the analysis record. Its creator `run`
+and a clickable Run reference should identify the **analysis execution that
+created its output artifacts**. Also include direct links to the source benchmark
+run record and its Lamin Run, for example in the analysis notes. Register the
+source record, observations and loaded artifacts as inputs to preserve lineage.
+The source benchmark execution and the analysis execution have different roles;
+keep both accessible.
+
 ## Local configurations
 
 Copy an example into an experiment's ignored config folder and edit it:

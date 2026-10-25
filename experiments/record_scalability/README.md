@@ -226,27 +226,146 @@ local execution retains its output directory for inspection.
 
 ## Analysis
 
-Run analysis scripts separately with `uv run python`. The latency, insertion and
-dashboard analyses select the latest completed observation at each population,
-matching workload sizes, link ranges and query settings. Completed observations
-from later-failed executions remain eligible. First calls are separate from warm
-summaries; warm error bars span the observed 5th–95th percentiles.
-Use `BENCHMARK_CONFIG` to select nondefault workload/query settings.
+Analysis scripts and their shared helpers live in `analyses/`, separate from
+population and measurement code. This is the recommended layout for experiments.
 
-- `analyze.py`: warm median latency and percentile plot.
-- `analyze_latency.py`: all-repetition boxplots, one panel per query.
-- `analyze_setup.py`: insertion and database-state summaries.
-- `analyze_dashboard.py`: query, population, storage and health panels.
-- `analyze_insert_batches.py`: combine insertion histories from explicit executions.
-
-For example, to combine the historical three-run population series as inputs:
+Four scripts analyze **one explicitly selected experiment-run record**. Pass the
+record UID from `record_scalability / runs`, not the UID of its linked Lamin Run.
+Each script follows the observations' `experiment_run` feature and loads only
+directly linked measurement artifacts. It does not select other runs or require
+`BENCHMARK_CONFIG`. Completed observations from an unfinished or failed execution
+remain eligible. Older runs without linked observations are not inputs to these
+new scripts; their stored historical analyses remain unchanged.
 
 ```sh
-uv run python experiments/record_scalability/analyze_insert_batches.py --runs \
-  31pnjmYN8DCeOQwT GOPs3rW021Gb12q0 IUFOiBQIEfoyTe2D
+uv run python experiments/record_scalability/analyses/query_latency.py RUN_RECORD_UID
+uv run python experiments/record_scalability/analyses/insert_batch_latency.py RUN_RECORD_UID
+uv run python experiments/record_scalability/analyses/query_time_breakdown.py RUN_RECORD_UID
+uv run python experiments/record_scalability/analyses/database_growth.py RUN_RECORD_UID
 ```
 
-This selects the furthest completed cumulative snapshot per execution, checks
-contiguous population ranges and equal batch sizes, and saves a combined table,
-SVG and PNG with minimum/maximum callouts. It does not move the historical runs
-into the new experiment.
+All four expose `analyze(run_record)` and `analyze(run_record_uid)` for Python:
+
+```python
+from experiments.record_scalability.analyses.query_latency import analyze
+
+analyze(run_record)
+```
+An existing Record object must belong to the configured tracking instance. The
+scripts connect and start tracking only when `analyze()` or the CLI is invoked;
+importing them does not run an analysis.
+
+Analysis transforms use the key
+`benchmarks/experiments/record_scalability/<source_run_uid>/<analysis_name>`, where
+`source_run_uid` is the source benchmark's Lamin Run UID. Each source execution
+and analysis has its own transform version family. Repeating the same analysis
+for the same source execution reuses that family and creates a new analysis run.
+
+### Query latency
+
+`query_latency.py` reads the query timings from every completed observation of
+the selected execution. Its summary contains one row per query and `n_rows`:
+
+- Sample count, minimum, maximum, mean, sample standard deviation (`ddof=1`),
+  median, Q1/Q3, IQR, and p01, p05, p90, p95 and p99.
+- Tukey fences (`Q1 - 1.5 IQR`, `Q3 + 1.5 IQR`), actual adjacent-value whiskers,
+  outlier count and outlier values, sufficient to recreate the boxplot.
+- First-call latency, separate `warm_*` statistics for repetitions after the
+  first, plus the original repetition and latency lists.
+- Source run-record, Lamin Run, observation and artifact UIDs, and the
+  observation completion timestamp.
+
+All repetitions, including the first call, contribute to the plotted boxes.
+Each query has its own facet, with independent x and y axes: population is a
+categorical x-axis and latency in milliseconds is the y-axis. Whiskers and
+outliers are plotted from the saved summary. Green triangles mark the mean of
+all calls; the dark line inside each box marks the median. A legend labels both.
+Quantiles use linear interpolation. Standard deviation is absent for one sample;
+warm statistics are absent when only the first call exists. With 11 repetitions,
+high percentiles describe the observed calls rather than a reliable tail estimate.
+
+### Batch insertion latency
+
+`insert_batch_latency.py` selects only the observation with the highest `n_rows`.
+Its `insert_batches.parquet` already contains the entire insertion history of
+this execution, so earlier snapshots are not loaded or concatenated. Different
+batch sizes, including partial milestone-ending batches, are retained.
+
+The plot shows batch latency in milliseconds against intervention population
+immediately after each batch (`records_after`). Batch latency includes generation,
+saving, commits and retry waits; queries, maintenance and pauses between milestones
+are excluded. The output table preserves original batch columns and adds source
+provenance.
+
+Duplicate observations at the same population, invalid/nonfinite timings,
+incomplete query repetitions and inconsistent insertion histories fail explicitly.
+A query-only run with no inserted batches has no insertion plot.
+
+### Database calls versus remaining query time
+
+`query_time_breakdown.py` reads the same query repetitions as `query_latency.py`.
+For each repetition it splits `latency_ms` into the measured `sql_execute_ms`
+and the remaining time. Each query has two panels: stacked mean durations by
+population, and the component percentages. All calls are included. Means are
+stacked because they add up to mean total latency; component medians do not.
+Percentages divide summed component durations by summed total latency.
+
+The summary has one row per query/population, including component means,
+medians, p95s, fractions, SQL statement counts, first/warm-call statistics,
+per-repetition values and source provenance. Missing driver timings and invalid
+decompositions fail explicitly. Sub-millisecond rounding discrepancies up to
+0.002 ms are clamped and counted; zero-duration groups have undefined fractions.
+
+Database-call time includes driver execution and network waits; it is not pure
+PostgreSQL execution time. The remainder includes fetching, Python processing
+and instrumentation overhead outside those calls; it is not CPU time. EXPLAIN
+timings come from separate diagnostic replays and are not subtracted here.
+
+### Database and table growth
+
+`database_growth.py` reads `table_distribution.parquet` at every milestone and
+uses `health.parquet` for total database bytes when available. The overview shows:
+
+- Whole-database storage versus the sum of captured table storage.
+- The 12 largest captured tables at the last milestone, split into data, indexes
+  and other/TOAST storage.
+- Rows and storage per intervention for up to eight of the largest tables.
+
+The main parquet table contains one row per table and population, original
+counts and byte sizes, changes since the preceding measured snapshot, rows and
+bytes per intervention, bytes per table row, index fraction and provenance.
+`table_review.parquet` summarizes each table's latest size, added rows/bytes,
+coverage and row/storage growth relative to population growth. The review is
+sorted by added bytes, then latest size, to help choose tables for investigation.
+A normalized growth factor above 1 means faster growth than population, not
+proof of a performance defect. Zero baselines and single-snapshot growth rates
+are left undefined.
+
+Open `tables.html` in the artifact browser for the overview and review table,
+then expand any table to see four individual plots and its exact measurements.
+Every captured table gets a drill-down, including ones outside the overview's
+top-table selections. Missing snapshots break lines rather than becoming zeros.
+Each individual row-count plot includes a least-squares line
+`table_rows = k * n_rows + intercept`, with `k` labelled in table rows per
+intervention. The intercept is fitted rather than forced to zero, allowing for
+pre-existing rows. Only measured snapshots enter the fit. With fewer than two
+distinct populations, the slope is unavailable. The review table also saves
+`row_slope_k` and `row_fit_intercept`.
+
+Captured distributions cover Record-related tables and the write-event table,
+not the whole database. Total database storage may therefore be larger than the
+sum of captured tables. Data/index totals also exclude some TOAST/overhead bytes
+that are included in total relation storage. The stored `bloat_ratio` is a
+PostgreSQL dead/live-row estimate, labelled as such in the report; it is not a
+measurement of physical bloat. Missing table distributions fail explicitly;
+missing database-size health values remain absent.
+
+### Saved results
+
+Each script creates a tracked analysis linked to its source record and input
+artifacts, saving a parquet table and SVG/PNG figures in the benchmark instance.
+Keys are scoped to the source record:
+`benchmarks/analysis/record_scalability/<run_record_uid>/<analysis_name>.*`.
+The database-growth analysis additionally saves its HTML drill-down report and
+per-table review under that key's folder. No analysis resets or writes to the
+load instance.
