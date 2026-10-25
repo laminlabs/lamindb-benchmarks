@@ -1,8 +1,9 @@
-"""Read-only load-instance facts for the dashboard.
+"""Load-instance facts and EXPLAIN diagnostics captured at each milestone.
 
-Imported by setup and query. Not a standalone script: the load database is
-wiped between configs, so these facts have to be captured during the run.
+These measurements describe the database at observation time, before the
+experiment resumes insertion toward its next population target.
 """
+
 from __future__ import annotations
 
 import json
@@ -11,6 +12,7 @@ import time
 from collections.abc import Callable
 
 import lamindb as ln
+import sqlparse
 
 LINK_TABLES = {"lamindb_recordulabel", "lamindb_recordrecord"}
 DATA_TABLES = {"lamindb_recordjson"}
@@ -59,12 +61,16 @@ def profile_lookup(replay: Callable[[], object]) -> tuple[object, dict]:
 
     with connections[ln.Record.objects.db].execute_wrapper(measure):
         value = replay()
-    return value, {"sql_execute_count": count, "sql_execute_ms": round(elapsed * 1000, 3)}
+    return value, {
+        "sql_execute_count": count,
+        "sql_execute_ms": round(elapsed * 1000, 3),
+    }
 
 
 def table_kind(name: str) -> str:
     if name in LINK_TABLES or (
-        name.startswith("lamindb_record") and name not in {"lamindb_record", *DATA_TABLES}
+        name.startswith("lamindb_record")
+        and name not in {"lamindb_record", *DATA_TABLES}
     ):
         return "link"
     if name in DATA_TABLES:
@@ -77,7 +83,7 @@ def count_rows(table: str) -> int | None:
         with _cursor() as cur:
             cur.execute(f"SELECT COUNT(*) FROM {_quote(table)}")
             return int(cur.fetchone()[0])
-    except Exception:
+    except Exception:  # noqa: BLE001 — best-effort diagnostics across database drivers
         return None
 
 
@@ -99,17 +105,18 @@ def database_facts() -> dict:
     }
 
 
-def explain_lookup(query_name: str, uids: list[str], replay: Callable[[], object]) -> dict:
-    """EXPLAIN ANALYZE the statements that read record and link tables.
+def explain_lookup(
+    query_name: str, uids: list[str], replay: Callable[[], object]
+) -> dict:
+    """EXPLAIN ANALYZE the data SELECT statements issued by one operation.
 
     The replay is the same lookup that was timed, run once more outside the
     timer. If its statements cannot be captured, the record filter alone is
     explained, which is the plan the archived benchmark recorded.
     """
     statements = _record_selects(replay)
-    explained = [
-        (sql, plan) for sql in statements if (plan := _explain_sql(sql)) is not None
-    ]
+    captured = [(sql, _explain_sql(sql)) for sql in statements]
+    explained = [(sql, plan) for sql, plan in captured if plan is not None]
     plans = [plan for _sql, plan in explained]
     source = "lookup"
     if not plans:
@@ -121,6 +128,11 @@ def explain_lookup(query_name: str, uids: list[str], replay: Callable[[], object
     # The fallback plan has no captured SQL; do not label it as an actual lookup.
     facts["sql"] = explained[0][0] if explained else ""
     facts["explain_analyze"] = json.dumps(plans, indent=2)
+    facts["statements"] = [
+        {"sql": sql, "plan": plan, "source": "lookup"} for sql, plan in captured
+    ]
+    if source == "record_filter":
+        facts["statements"].append({"sql": None, "plan": plans[0], "source": source})
     return facts
 
 
@@ -197,7 +209,7 @@ def _record_selects(replay: Callable[[], object]) -> list[str]:
     try:
         replay()
         logged = list(connections[alias].queries)
-    except Exception:
+    except Exception:  # noqa: BLE001 — best-effort diagnostics across database drivers
         return []
     finally:
         settings.DEBUG = previous
@@ -208,20 +220,23 @@ def _record_selects(replay: Callable[[], object]) -> list[str]:
 
 
 def _select_statements(sql: str) -> list[str]:
-    """Split a logged query into the SELECTs that read record tables.
+    """Keep all data SELECTs, excluding the authentication token call.
 
     Django logs the RLS `set_token` call in the same string as the lookup.
     Explaining that compound string only plans the token call, which is a
     constant Result and hides whether the lookup used an index.
     """
     statements = []
-    for part in sql.split(";"):
+    for part in sqlparse.split(sql):
         statement = part.strip()
         head = statement[:16].upper()
-        if not head.startswith("SELECT") or head.startswith("SELECT SET_TOKEN"):
+        if not head.startswith("SELECT") or re.match(
+            r'^SELECT\s+(?:[\w"]+\.)?"?set_token"?\s*\(',
+            statement,
+            re.IGNORECASE,
+        ):
             continue
-        if any(table in statement for table in RECORD_TABLES):
-            statements.append(statement)
+        statements.append(statement.rstrip(";"))
     return statements
 
 
@@ -231,7 +246,7 @@ def _explain_sql(sql: str) -> dict | None:
         with _cursor() as cur:
             cur.execute(f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {statement}")
             raw = cur.fetchone()[0]
-    except Exception:
+    except Exception:  # noqa: BLE001 — best-effort diagnostics across database drivers
         return None
     return _plan_root(raw)
 
@@ -246,7 +261,7 @@ def _explain_queryset(query_name: str, uids: list[str]) -> dict | None:
     )
     try:
         raw = query.explain(analyze=True, buffers=True, format="json")
-    except Exception:
+    except Exception:  # noqa: BLE001 — best-effort diagnostics across database drivers
         return None
     return _plan_root(raw)
 

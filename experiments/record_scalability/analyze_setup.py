@@ -1,13 +1,14 @@
-"""Bar charts of setup cost for succeeded experiment_002 runs.
+"""Bar charts of setup cost for completed record scalability observations.
 
 The x axis is the configured record count as a category. Each facet is one
 setup fact: how long creation took, how many rows the database held, how
-much disk it used, and the related write counts. Uses the latest succeeded
-run at each size.
+much disk it used, and the related write counts. Uses the latest completed
+observation at each size.
 
 Usage:
-  python experiments/experiment_002/analyze_setup.py
+  python experiments/record_scalability/analyze_setup.py
 """
+
 from __future__ import annotations
 
 import sys
@@ -23,6 +24,11 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from benchmarks.analysis_inputs import (
+    measurement_records,
+    measurement_values,
+    observation_values,
+)
 from benchmarks.config import (
     BENCHMARK_INSTANCE,
     BENCHMARK_INSTANCE_ENV,
@@ -36,7 +42,7 @@ from benchmarks.experiment import (
     require_child,
     run_uid_of,
 )
-from experiments.experiment_002.workload import matches_analysis_workload
+from experiments.record_scalability.workload import matches_analysis_workload
 
 NAME = Path(__file__).resolve().parent.name
 # column, panel title, y label, scale applied to the stored number, text format
@@ -62,7 +68,7 @@ Summarizes the insert and the database state after it. The load database is wipe
 
 ## What is analyzed
 
-Succeeded runs only. The latest succeeded run at each record count is used. Setup time and insert rate come from the timed creation of the intervention records. Total rows, database size, write events, and auxiliary entries come from the server facts captured at the end of that run.
+Completed observations are eligible even when their execution later fails. The latest completed observation at each record count is used. Setup time and insert rate come from the timed creation of the intervention records. Total rows, database size, write events, and auxiliary entries come from the server facts captured at the end of that run.
 
 ## How it is reported
 
@@ -70,8 +76,8 @@ One bar chart per fact, stacked as vertical facets with a shared categorical x a
 
 ## Artifacts
 
-- `benchmarks/analysis/experiment_002/setup_summary.parquet`: one row per record count, with setup time, insert rate, total rows, disk bytes, write events, and auxiliary entries.
-- `benchmarks/analysis/experiment_002/setup_summary.svg`: the bar-chart facets.
+- `benchmarks/analysis/record_scalability/setup_summary.parquet`: one row per record count, with setup time, insert rate, total rows, disk bytes, write events, and auxiliary entries.
+- `benchmarks/analysis/record_scalability/setup_summary.svg`: the bar-chart facets.
 """
 
 
@@ -124,7 +130,7 @@ def load_summary(runs: ln.Record) -> pd.DataFrame:
             continue
         rows.append({"run_uid": run_uid_of(record), "n_rows": n_rows, **facts})
     if not rows:
-        sys.exit(f"succeeded {NAME} runs have no setup measurements")
+        sys.exit(f"{NAME} measurements have no setup measurements")
     return pd.DataFrame(rows).sort_values("n_rows")
 
 
@@ -141,14 +147,19 @@ def setup_figure(summary: pd.DataFrame) -> go.Figure:
         vertical_spacing=0.03,
         subplot_titles=tuple(panel[1] for panel in present),
     )
-    for index, (column, _title, ylabel, scale, text_format) in enumerate(present, start=1):
+    for index, (column, _title, ylabel, scale, text_format) in enumerate(
+        present, start=1
+    ):
         values = pd.to_numeric(summary[column], errors="coerce") * scale
         figure.add_trace(
             go.Bar(
                 x=labels,
                 y=values,
                 marker_color="#4c78a8",
-                text=[text_format.format(value) if pd.notna(value) else "" for value in values],
+                text=[
+                    text_format.format(value) if pd.notna(value) else ""
+                    for value in values
+                ],
                 textposition="outside",
                 cliponaxis=False,
                 showlegend=False,
@@ -183,7 +194,7 @@ def upload(
         key=TABLE_KEY,
         description=(
             "Setup time, insert rate, total rows, disk bytes, write events, "
-            "and auxiliary entries for the latest succeeded run at each size."
+            "and auxiliary entries for the latest completed observation at each size."
         ),
         features=features,
     ).save()
@@ -207,7 +218,7 @@ def run_facts(record: ln.Record, feature_col: ln.Feature) -> dict:
     health: dict = {}
     insert: dict = {}
     for artifact in measurements(record, feature_col):
-        values = artifact.features.get_values()
+        values = measurement_values(artifact)
         kind = measurement_kind(values, artifact)
         if kind == "health":
             health = picked(values, HEALTH_KEYS)
@@ -259,11 +270,13 @@ def measurement_kind(values: dict, artifact: ln.Artifact) -> str:
 
 def latest_runs(runs: ln.Record) -> list[tuple[ln.Record, dict, int]]:
     chosen: dict[int, tuple[str, ln.Record, dict]] = {}
-    for record in ln.Record.filter(type=runs, is_type=False):
-        values = record.features.get_values()
+    for record in measurement_records(runs):
+        values = observation_values(record)
         if values.get("succeeded") is not True:
             continue
-        if not matches_analysis_workload((record.run.params or {}) if record.run else {}):
+        if not matches_analysis_workload(
+            (record.run.params or {}) if record.run else {}
+        ):
             continue
         n_rows = as_int(values.get("n_rows"), f"{record.name} n_rows")
         stamp = str(values.get("started_at") or "")
@@ -271,7 +284,7 @@ def latest_runs(runs: ln.Record) -> list[tuple[ln.Record, dict, int]]:
         if current is None or stamp >= current[0]:
             chosen[n_rows] = (stamp, record, values)
     if not chosen:
-        sys.exit(f"no succeeded runs for {NAME}")
+        sys.exit(f"no completed measurements for {NAME}")
     return [
         (record, values, n_rows)
         for n_rows, (_stamp, record, values) in sorted(chosen.items())

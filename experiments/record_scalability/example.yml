@@ -1,0 +1,18 @@
+experiment: experiments/record_scalability
+n_rows: [100, 1000]
+n_repetitions: 11
+n_batch: 20
+random_seed: 0
+n_genes: 100
+query_gene: gene_000
+query_protocol: protocol_B
+query_treatment_start: "2025-01-01T00:00:00Z"
+query_treatment_end: "2025-07-01T00:00:00Z"
+n_molecules: 20
+genes_per_record_min: 3
+genes_per_record_max: 5
+small_molecules_per_record_min: 1
+small_molecules_per_record_max: 3
+
+# Optional assertion; omit to detect the starting population automatically.
+# existing_rows: 0

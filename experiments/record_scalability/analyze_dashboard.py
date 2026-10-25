@@ -1,4 +1,4 @@
-"""Eight-panel dashboard for succeeded experiment_002 runs.
+"""Eight-panel dashboard for completed record scalability observations.
 
 Reads measurements captured during each run. The load database is wiped
 between configs, so EXPLAIN ANALYZE, table sizes, and server health are not
@@ -6,8 +6,9 @@ recomputed here. The first lookup repetition is the first call and is left out
 of the latency lines.
 
 Usage:
-  python experiments/experiment_002/analyze_dashboard.py
+  python experiments/record_scalability/analyze_dashboard.py
 """
+
 from __future__ import annotations
 
 import sys
@@ -23,6 +24,11 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from benchmarks.analysis_inputs import (
+    measurement_records,
+    measurement_values,
+    observation_values,
+)
 from benchmarks.config import (
     BENCHMARK_INSTANCE,
     BENCHMARK_INSTANCE_ENV,
@@ -36,29 +42,10 @@ from benchmarks.experiment import (
     require_child,
     run_uid_of,
 )
-from experiments.experiment_002.workload import matches_analysis_workload
+from experiments.record_scalability.query_styles import COLORS, LABELS, LOOKUPS, SYMBOLS
+from experiments.record_scalability.workload import matches_analysis_workload
 
 NAME = Path(__file__).resolve().parent.name
-LOOKUPS = (
-    "uid_lookup",
-    "uid_with_features",
-    "uid_batch_with_features",
-)
-LABELS = {
-    "uid_lookup": "lookup",
-    "uid_with_features": "with features",
-    "uid_batch_with_features": "batch with features",
-}
-COLORS = {
-    "uid_lookup": "#1f77b4",
-    "uid_with_features": "#ff7f0e",
-    "uid_batch_with_features": "#2ca02c",
-}
-SYMBOLS = {
-    "uid_lookup": "circle",
-    "uid_with_features": "square",
-    "uid_batch_with_features": "diamond",
-}
 SCAN_COLOR = {
     "index": "#2ca02c",
     "seq": "#d62728",
@@ -74,13 +61,13 @@ DESCRIPTION = (
 )
 NOTES = """# Intervention growth dashboard
 
-Brings the scale measurements for this experiment into one view. Each point is the latest succeeded run at that number of intervention records.
+Brings the scale measurements for this experiment into one view. Each point is the latest completed observation at that number of intervention records.
 
 ## What is analyzed
 
-Succeeded runs only. Insert rate is the timed creation of the intervention records. Write events are entries in the database write log after the run. Auxiliary entries are rows in the record link and record JSON tables. Disk space and cache hit ratio are the load database's own figures at the end of the run, not a shared server total.
+Completed observations are eligible even when their execution later fails. Insert rate is the timed creation of the intervention records. Write events are entries in the database write log after the run. Auxiliary entries are rows in the record link and record JSON tables. Disk space and cache hit ratio are the load database's own figures at the end of the run, not a shared server total.
 
-Client latency is the warm median of the three uid lookups. The first repetition is the first call and is not plotted. Error bars span the warm 5th to 95th percentile. Database execution time and scan type come from EXPLAIN ANALYZE, captured once after those timed calls because a later analysis cannot see a wiped database. A lookup is an index scan only when every explained record or link statement used an index and none used a sequential scan. Mixed means the plan used both.
+Client latency is the warm median of the three UID lookups, two latest-100 timestamp queries, the latest-100 gene query, and the gene/protocol/time query. The first repetition is the first call and is not plotted. Error bars span the warm 5th to 95th percentile. Database execution time and scan type come from EXPLAIN ANALYZE, captured once after those timed calls because a later analysis cannot see a wiped database. A lookup is an index scan only when every explained record or link statement used an index and none used a sequential scan. Mixed means the plan used both.
 
 ## How it is reported
 
@@ -88,9 +75,9 @@ Eight panels, in archive order: write events and records, auxiliary-table entrie
 
 ## Artifacts
 
-- `benchmarks/analysis/experiment_002/dashboard_snapshot.parquet`: one row per record count, with write events, auxiliary entries, disk, cache hit ratio, and insert rate.
-- `benchmarks/analysis/experiment_002/dashboard_queries.parquet`: one row per lookup and record count, with warm latency, database execution time, and scan type.
-- `benchmarks/analysis/experiment_002/dashboard.svg`: the eight-panel figure.
+- `benchmarks/analysis/record_scalability/dashboard_snapshot.parquet`: one row per record count, with write events, auxiliary entries, disk, cache hit ratio, and insert rate.
+- `benchmarks/analysis/record_scalability/dashboard_queries.parquet`: one row per lookup and record count, with warm latency, database execution time, and scan type.
+- `benchmarks/analysis/record_scalability/dashboard.svg`: the eight-panel figure.
 """
 SNAPSHOT_KEY = f"benchmarks/analysis/{NAME}/dashboard_snapshot.parquet"
 QUERY_KEY = f"benchmarks/analysis/{NAME}/dashboard_queries.parquet"
@@ -143,7 +130,7 @@ def load(runs: ln.Record) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         sys.exit(f"{runs.name} schema has no artifact column")
     selected = _latest_runs(runs)
     if not selected:
-        sys.exit(f"no succeeded runs for {NAME}")
+        sys.exit(f"no completed measurements for {NAME}")
     snapshots = []
     queries = []
     storage = []
@@ -151,9 +138,13 @@ def load(runs: ln.Record) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         print(f"using {record.name} for {n_rows} records")
         facts = _run_facts(record, feature, n_rows)
         if facts["health"]:
-            snapshots.append({"run_uid": run_uid_of(record), "n_rows": n_rows, **facts["health"]})
+            snapshots.append(
+                {"run_uid": run_uid_of(record), "n_rows": n_rows, **facts["health"]}
+            )
         elif facts["insert"]:
-            snapshots.append({"run_uid": run_uid_of(record), "n_rows": n_rows, **facts["insert"]})
+            snapshots.append(
+                {"run_uid": run_uid_of(record), "n_rows": n_rows, **facts["insert"]}
+            )
         else:
             snapshots.append({"run_uid": run_uid_of(record), "n_rows": n_rows})
         queries.extend(facts["queries"])
@@ -161,7 +152,7 @@ def load(runs: ln.Record) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         if not facts["explained"]:
             print(f"[warn] {record.name} has no EXPLAIN ANALYZE measurement")
     if not queries and all(set(row) <= {"run_uid", "n_rows"} for row in snapshots):
-        sys.exit(f"succeeded {NAME} runs have no dashboard measurements")
+        sys.exit(f"{NAME} measurements have no dashboard measurements")
     return pd.DataFrame(snapshots), pd.DataFrame(queries), pd.DataFrame(storage)
 
 
@@ -269,11 +260,13 @@ def upload(
 
 def _latest_runs(runs: ln.Record) -> list[tuple[ln.Record, dict, int]]:
     chosen: dict[int, tuple[str, ln.Record, dict]] = {}
-    for record in ln.Record.filter(type=runs, is_type=False):
-        values = record.features.get_values()
+    for record in measurement_records(runs):
+        values = observation_values(record)
         if values.get("succeeded") is not True:
             continue
-        if not matches_analysis_workload((record.run.params or {}) if record.run else {}):
+        if not matches_analysis_workload(
+            (record.run.params or {}) if record.run else {}
+        ):
             continue
         n_rows = _as_int(values.get("n_rows"), f"{record.name} n_rows")
         stamp = str(values.get("started_at") or "")
@@ -295,19 +288,28 @@ def _run_facts(record: ln.Record, feature: ln.Feature, n_rows: int) -> dict:
     samples: dict[str, list[float]] = {name: [] for name in LOOKUPS}
     plans: dict[str, dict] = {}
     for artifact in _measurements(record, feature):
-        values = artifact.features.get_values()
+        values = measurement_values(artifact)
         kind = _kind(values, artifact)
         if kind == "health":
             health = _health_row(values)
         elif kind == "insert":
             insert = _insert_row(values)
+        elif kind == "distribution" and Path(artifact.key).stem == "table_distribution":
+            for row in artifact.load().to_dict(orient="records"):
+                storage.append({"n_rows": n_rows, **_table_row(row, artifact)})
         elif kind == "distribution":
             storage.append({"n_rows": n_rows, **_table_row(values, artifact)})
         elif kind == "explain":
             explained = True
-            source = _source_query(values, artifact)
-            if source in LOOKUPS:
-                plans[source] = _plan_row(values)
+            plan_rows = (
+                artifact.load().to_dict("records")
+                if Path(artifact.key).stem == "explain"
+                else [values]
+            )
+            for plan_values in plan_rows:
+                source = _source_query(plan_values, artifact)
+                if source in LOOKUPS:
+                    plans[source] = _plan_row(plan_values)
         elif kind == "lookup":
             _collect_warm(artifact, values, samples)
     for key, value in insert.items():
@@ -325,7 +327,7 @@ def _run_facts(record: ln.Record, feature: ln.Feature, n_rows: int) -> dict:
             row["latency_median_ms"] = float(series.median())
             row["latency_p05_ms"] = float(series.quantile(0.05))
             row["latency_p95_ms"] = float(series.quantile(0.95))
-            row["n_warm"] = int(len(warm))
+            row["n_warm"] = len(warm)
         if len(row) > 4:
             queries.append(row)
     return {
@@ -337,7 +339,9 @@ def _run_facts(record: ln.Record, feature: ln.Feature, n_rows: int) -> dict:
     }
 
 
-def _collect_warm(artifact: ln.Artifact, values: dict, samples: dict[str, list[float]]) -> None:
+def _collect_warm(
+    artifact: ln.Artifact, values: dict, samples: dict[str, list[float]]
+) -> None:
     query_name = values.get("source_query") or values.get("query_name")
     if query_name not in LOOKUPS:
         return
@@ -504,8 +508,12 @@ def _error_bar(group: pd.DataFrame, color: str) -> dict | None:
     if "latency_p05_ms" not in group.columns or "latency_p95_ms" not in group.columns:
         return None
     center = pd.to_numeric(group["latency_median_ms"], errors="coerce")
-    below = (center - pd.to_numeric(group["latency_p05_ms"], errors="coerce")).clip(lower=0)
-    above = (pd.to_numeric(group["latency_p95_ms"], errors="coerce") - center).clip(lower=0)
+    below = (center - pd.to_numeric(group["latency_p05_ms"], errors="coerce")).clip(
+        lower=0
+    )
+    above = (pd.to_numeric(group["latency_p95_ms"], errors="coerce") - center).clip(
+        lower=0
+    )
     return {
         "type": "data",
         "symmetric": False,
@@ -561,8 +569,12 @@ def _health_row(values: dict) -> dict:
 def _insert_row(values: dict) -> dict:
     row = {}
     for key in (
-        "insert_seconds", "insert_records_per_sec", "n_records", "n_events",
-        "insert_retry_count", "insert_batch_count",
+        "insert_seconds",
+        "insert_records_per_sec",
+        "n_records",
+        "n_events",
+        "insert_retry_count",
+        "insert_batch_count",
     ):
         number = _optional_number(values.get(key))
         if number is not None:
@@ -591,9 +603,14 @@ def _plan_row(values: dict) -> dict:
         "scan": _scan_kind(values),
         "plan_source": values.get("plan_source"),
     }
-    from observe import BUFFER_FIELDS
+    from experiments.record_scalability.observe import BUFFER_FIELDS
 
-    for key in ("execution_time_ms", "planning_time_ms", "n_statements", *BUFFER_FIELDS):
+    for key in (
+        "execution_time_ms",
+        "planning_time_ms",
+        "n_statements",
+        *BUFFER_FIELDS,
+    ):
         number = _optional_number(values.get(key))
         if number is not None:
             row[key] = number
@@ -607,7 +624,7 @@ def _kind(values: dict, artifact: ln.Artifact) -> str:
     name = _query_name(artifact)
     if name in LOOKUPS:
         return "lookup"
-    if name.startswith("explain_"):
+    if name == "explain" or name.startswith("explain_"):
         return "explain"
     if name in {"health", "insert"}:
         return name
@@ -625,7 +642,7 @@ def _source_query(values: dict, artifact: ln.Artifact) -> str:
 
 
 def _query_name(artifact: ln.Artifact) -> str:
-    value = artifact.features.get_values().get("query_name")
+    value = measurement_values(artifact).get("query_name")
     if isinstance(value, str) and value.strip():
         return value.strip()
     stem = Path(artifact.key or artifact.uid).stem

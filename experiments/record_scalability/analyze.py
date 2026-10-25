@@ -1,4 +1,4 @@
-"""Summarize feature-lookup latency for succeeded experiment_002 runs.
+"""Summarize feature-lookup latency for completed record scalability observations.
 
 The first repetition is the first call and is kept out of the plot.
 Warm repetitions are summarized as median latency, with the 5th and 95th
@@ -6,8 +6,9 @@ percentiles as error bars. Uploads the table and an SVG figure, then stores
 an analysis record that links both.
 
 Usage:
-  python experiments/experiment_002/analyze.py
+  python experiments/record_scalability/analyze.py
 """
+
 from __future__ import annotations
 
 import sys
@@ -22,6 +23,11 @@ import lamindb as ln
 import pandas as pd
 import plotly.graph_objects as go
 
+from benchmarks.analysis_inputs import (
+    measurement_records,
+    measurement_values,
+    observation_values,
+)
 from benchmarks.config import (
     BENCHMARK_INSTANCE,
     BENCHMARK_INSTANCE_ENV,
@@ -35,7 +41,8 @@ from benchmarks.experiment import (
     require_child,
     run_uid_of,
 )
-from experiments.experiment_002.workload import matches_analysis_workload
+from experiments.record_scalability.query_styles import COLORS, LABELS, SYMBOLS
+from experiments.record_scalability.workload import matches_analysis_workload
 
 NAME = Path(__file__).resolve().parent.name
 LATENCY = "latency_ms"
@@ -53,7 +60,7 @@ Compares how long each uid lookup takes after a controlled number of interventio
 
 ## What is analyzed
 
-Succeeded runs only. Each run times three lookups on the same sampled records: one record by uid, that record with its features, and a batch of records with their features. The first repetition is the first call. Later repetitions are the warm calls.
+Completed observations are eligible even when their execution later fails. Each run times three UID lookups, latest-100 queries ordered by treatment time and creation time, the latest 100 linked to the configured gene, and a gene/protocol/time query with all features. The UID lookups use the same sampled records: one record by uid, that record with its features, and a batch of records with their features. The first repetition is the first call. Later repetitions are the warm calls.
 
 ## How it is reported
 
@@ -61,24 +68,9 @@ One table row per lookup and number of records. The first call is the first repe
 
 ## Artifacts
 
-- `benchmarks/analysis/experiment_002/latency_median_p95.parquet`: the summary table. One row per lookup and record count.
-- `benchmarks/analysis/experiment_002/latency_median_p95.svg`: the scatter figure.
+- `benchmarks/analysis/record_scalability/latency_median_p95.parquet`: the summary table. One row per lookup and record count.
+- `benchmarks/analysis/record_scalability/latency_median_p95.svg`: the scatter figure.
 """
-LABELS = {
-    "uid_lookup": "lookup",
-    "uid_with_features": "with features",
-    "uid_batch_with_features": "batch with features",
-}
-COLORS = {
-    "uid_lookup": "#1f77b4",
-    "uid_with_features": "#ff7f0e",
-    "uid_batch_with_features": "#2ca02c",
-}
-SYMBOLS = {
-    "uid_lookup": "circle",
-    "uid_with_features": "square",
-    "uid_batch_with_features": "diamond",
-}
 
 
 def main() -> None:
@@ -124,11 +116,13 @@ def load_samples(runs: ln.Record) -> pd.DataFrame:
         sys.exit(f"{runs.name} schema has no artifact column")
     rows: list[dict] = []
     succeeded = 0
-    for record in ln.Record.filter(type=runs, is_type=False):
-        values = record.features.get_values()
+    for record in measurement_records(runs):
+        values = observation_values(record)
         if values.get("succeeded") is not True:
             continue
-        if not matches_analysis_workload((record.run.params or {}) if record.run else {}):
+        if not matches_analysis_workload(
+            (record.run.params or {}) if record.run else {}
+        ):
             continue
         succeeded += 1
         n_rows = _as_int(values.get("n_rows"), f"{record.name} n_rows")
@@ -137,7 +131,7 @@ def load_samples(runs: ln.Record) -> pd.DataFrame:
             print(f"[warn] {record.name} succeeded but has no measurement artifact")
             continue
         for artifact in artifacts:
-            values = artifact.features.get_values()
+            values = measurement_values(artifact)
             query_name = _query_name(artifact, values)
             if query_name not in LABELS:
                 continue
@@ -148,7 +142,9 @@ def load_samples(runs: ln.Record) -> pd.DataFrame:
             if not isinstance(frame, pd.DataFrame):
                 continue
             if LATENCY not in frame.columns or REPETITION not in frame.columns:
-                print(f"[warn] {artifact.key or artifact.uid} has no latency repetitions")
+                print(
+                    f"[warn] {artifact.key or artifact.uid} has no latency repetitions"
+                )
                 continue
             n_uids = _optional_int(values.get("n_uids"))
             for raw in frame.itertuples(index=False):
@@ -168,9 +164,9 @@ def load_samples(runs: ln.Record) -> pd.DataFrame:
                     }
                 )
     if succeeded == 0:
-        sys.exit(f"no succeeded runs for {NAME}")
+        sys.exit(f"no completed measurements for {NAME}")
     if not rows:
-        sys.exit(f"succeeded {NAME} runs have no {LATENCY} measurements")
+        sys.exit(f"{NAME} measurements have no {LATENCY} measurements")
     return pd.DataFrame(rows)
 
 
@@ -190,15 +186,17 @@ def summarize(samples: pd.DataFrame) -> pd.DataFrame:
                 "n_rows": int(n_rows),
                 "n_uids": _group_uids(group, query_name, int(n_rows)),
                 "n_runs": int(group["run_uid"].nunique()),
-                "n_warm": int(len(warm)),
-                "latency_first_call_ms": float(first_call.median()) if not first_call.empty else None,
+                "n_warm": len(warm),
+                "latency_first_call_ms": float(first_call.median())
+                if not first_call.empty
+                else None,
                 "latency_median_ms": float(warm.median()),
                 "latency_p05_ms": float(warm.quantile(0.05)),
                 "latency_p95_ms": float(warm.quantile(0.95)),
             }
         )
     if not rows:
-        sys.exit(f"succeeded {NAME} runs have no warm repetitions")
+        sys.exit(f"{NAME} measurements have no warm repetitions")
     return pd.DataFrame(rows)
 
 
@@ -216,8 +214,14 @@ def latency_figure(summary: pd.DataFrame) -> go.Figure:
                 y=median,
                 mode="markers",
                 name=label,
-                marker={"color": color, "size": 10, "symbol": SYMBOLS.get(query_name, "circle")},
-                error_y=_error_bar(median, stats["latency_p05_ms"], stats["latency_p95_ms"], color),
+                marker={
+                    "color": color,
+                    "size": 10,
+                    "symbol": SYMBOLS.get(query_name, "circle"),
+                },
+                error_y=_error_bar(
+                    median, stats["latency_p05_ms"], stats["latency_p95_ms"], color
+                ),
                 hovertemplate=(
                     "n_rows=%{x}<br>median=%{y:.3f} ms<extra>" + label + "</extra>"
                 ),
@@ -241,9 +245,7 @@ def latency_figure(summary: pd.DataFrame) -> go.Figure:
     return figure
 
 
-def _error_bar(
-    median: pd.Series, low: pd.Series, high: pd.Series, color: str
-) -> dict:
+def _error_bar(median: pd.Series, low: pd.Series, high: pd.Series, color: str) -> dict:
     center = pd.to_numeric(median, errors="coerce")
     below = (center - pd.to_numeric(low, errors="coerce")).clip(lower=0)
     above = (pd.to_numeric(high, errors="coerce") - center).clip(lower=0)
@@ -313,7 +315,7 @@ def _measurements(record: ln.Record, feature: ln.Feature) -> list[ln.Artifact]:
 
 def _query_name(artifact: ln.Artifact, values: dict | None = None) -> str:
     if values is None:
-        values = artifact.features.get_values()
+        values = measurement_values(artifact)
     value = values.get("query_name")
     if isinstance(value, str) and value.strip():
         return value.strip()

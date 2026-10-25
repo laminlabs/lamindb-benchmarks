@@ -1372,6 +1372,7 @@ dependencies = [
     { name = "psycopg2-binary" },
     { name = "pyarrow" },
     { name = "python-dotenv" },
+    { name = "sqlparse" },
 ]
 
 [package.optional-dependencies]
@@ -1415,6 +1416,7 @@ requires-dist = [
     { name = "pysam", marker = "extra == 'lakehouse'" },
     { name = "python-dotenv", specifier = ">=1.1.0" },
     { name = "seaborn", marker = "extra == 'lakehouse'", specifier = ">=0.13.0" },
+    { name = "sqlparse", specifier = ">=0.6" },
     { name = "torch", marker = "extra == 'lakehouse'", specifier = ">=2.0.0" },
     { name = "tqdm", marker = "extra == 'lakehouse'", specifier = ">=4.0.0" },
 ]

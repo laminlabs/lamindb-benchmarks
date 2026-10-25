@@ -1,13 +1,14 @@
-"""Boxplots of query latency for succeeded experiment_002 runs.
+"""Boxplots of query latency for completed record scalability observations.
 
 One facet per lookup. The boxes are vertical. The shared x axis is the
 configured record count, treated as a category so the sizes are evenly
-spaced. Uses the latest succeeded run at each size. Every timed repetition
+spaced. Uses the latest completed observation at each size. Every timed repetition
 is included; the first is the first call.
 
 Usage:
-  python experiments/experiment_002/analyze_latency.py
+  python experiments/record_scalability/analyze_latency.py
 """
+
 from __future__ import annotations
 
 import sys
@@ -23,6 +24,11 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from benchmarks.analysis_inputs import (
+    measurement_records,
+    measurement_values,
+    observation_values,
+)
 from benchmarks.config import (
     BENCHMARK_INSTANCE,
     BENCHMARK_INSTANCE_ENV,
@@ -36,26 +42,12 @@ from benchmarks.experiment import (
     require_child,
     run_uid_of,
 )
-from experiments.experiment_002.workload import matches_analysis_workload
+from experiments.record_scalability.query_styles import COLORS, LABELS, LOOKUPS
+from experiments.record_scalability.workload import matches_analysis_workload
 
 NAME = Path(__file__).resolve().parent.name
 LATENCY = "latency_ms"
 REPETITION = "repetition"
-LOOKUPS = (
-    "uid_lookup",
-    "uid_with_features",
-    "uid_batch_with_features",
-)
-LABELS = {
-    "uid_lookup": "lookup",
-    "uid_with_features": "with features",
-    "uid_batch_with_features": "batch with features",
-}
-COLORS = {
-    "uid_lookup": "#1f77b4",
-    "uid_with_features": "#ff7f0e",
-    "uid_batch_with_features": "#2ca02c",
-}
 TABLE_KEY = f"benchmarks/analysis/{NAME}/latency_boxplot.parquet"
 PLOT_KEY = f"benchmarks/analysis/{NAME}/latency_boxplot.svg"
 TITLE = "Query latency by record count"
@@ -69,16 +61,16 @@ Shows the spread of timed lookup calls at each configured size.
 
 ## What is analyzed
 
-Succeeded runs only. The latest succeeded run at each record count is used, so a later rerun replaces the earlier one. All three lookups are included: one record by uid, that record with its features, and a batch of records with their features. Every repetition is plotted. The first repetition is the first call and can sit above the rest of the box.
+Completed observations are eligible even when their execution later fails. The latest completed observation at each record count is used, so a later rerun replaces the earlier one. The three UID lookups, both latest-100 timestamp queries, the latest-100 gene query, and the gene/protocol/time query are included: one record by uid, that record with its features, and a batch of records with their features. Every repetition is plotted. The first repetition is the first call and can sit above the rest of the box.
 
 ## How it is reported
 
-Three vertical facets, one per query, with a shared categorical x axis. The categories are the configured record counts, evenly spaced rather than placed on a log scale. Each box is the timed repetitions of that query at that size. Points are drawn on the box.
+One vertical facet per query, one per query, with a shared categorical x axis. The categories are the configured record counts, evenly spaced rather than placed on a log scale. Each box is the timed repetitions of that query at that size. Points are drawn on the box.
 
 ## Artifacts
 
-- `benchmarks/analysis/experiment_002/latency_boxplot.parquet`: one row per timed repetition, with the run, query, record count, and latency.
-- `benchmarks/analysis/experiment_002/latency_boxplot.svg`: the three-facet boxplot.
+- `benchmarks/analysis/record_scalability/latency_boxplot.parquet`: one row per timed repetition, with the run, query, record count, and latency.
+- `benchmarks/analysis/record_scalability/latency_boxplot.svg`: the per-query boxplot.
 """
 
 
@@ -124,15 +116,15 @@ def load_samples(runs: ln.Record) -> pd.DataFrame:
         sys.exit(f"{runs.name} schema has no artifact column")
     selected = {record.uid: n_rows for record, _values, n_rows in latest_runs(runs)}
     if not selected:
-        sys.exit(f"no succeeded runs for {NAME}")
+        sys.exit(f"no completed measurements for {NAME}")
     rows: list[dict] = []
-    for record in ln.Record.filter(type=runs, is_type=False):
+    for record in measurement_records(runs):
         if record.uid not in selected:
             continue
         n_rows = selected[record.uid]
         print(f"using {record.name} for {n_rows} records")
         for artifact in measurements(record, feature):
-            values = artifact.features.get_values()
+            values = measurement_values(artifact)
             query_name = query_name_of(artifact, values)
             if query_name not in LABELS:
                 continue
@@ -143,7 +135,9 @@ def load_samples(runs: ln.Record) -> pd.DataFrame:
             if not isinstance(frame, pd.DataFrame):
                 continue
             if LATENCY not in frame.columns or REPETITION not in frame.columns:
-                print(f"[warn] {artifact.key or artifact.uid} has no latency repetitions")
+                print(
+                    f"[warn] {artifact.key or artifact.uid} has no latency repetitions"
+                )
                 continue
             for raw in frame.itertuples(index=False):
                 row = raw._asdict()
@@ -162,12 +156,12 @@ def load_samples(runs: ln.Record) -> pd.DataFrame:
                     }
                 )
     if not rows:
-        sys.exit(f"succeeded {NAME} runs have no {LATENCY} measurements")
+        sys.exit(f"{NAME} measurements have no {LATENCY} measurements")
     return pd.DataFrame(rows)
 
 
 def latency_figure(samples: pd.DataFrame) -> go.Figure:
-    """Three vertical boxplot facets with one shared categorical x axis."""
+    """Per-query vertical boxplot facets with one shared categorical x axis."""
     labels = [str(size) for size in sorted(samples["n_rows"].unique())]
     figure = make_subplots(
         rows=len(LOOKUPS),
@@ -214,7 +208,7 @@ def latency_figure(samples: pd.DataFrame) -> go.Figure:
     figure.update_layout(
         title=TITLE,
         template="plotly_white",
-        height=860,
+        height=max(860, 280 * len(LOOKUPS)),
         width=760,
         margin={"t": 80, "b": 60},
         boxmode="overlay",
@@ -233,7 +227,7 @@ def upload(
         samples.sort_values(["query_name", "n_rows", REPETITION]),
         key=TABLE_KEY,
         description=(
-            "Timed lookup repetitions for the latest succeeded run at each "
+            "Timed lookup repetitions for the latest completed observation at each "
             "record count. Includes the first call."
         ),
         features=features,
@@ -245,7 +239,7 @@ def upload(
             svg_path,
             key=PLOT_KEY,
             description=(
-                "Three vertical boxplot facets of lookup latency, with a "
+                "Per-query vertical boxplot facets of lookup latency, with a "
                 "shared categorical x axis of record counts."
             ),
             features=features,
@@ -256,11 +250,13 @@ def upload(
 
 def latest_runs(runs: ln.Record) -> list[tuple[ln.Record, dict, int]]:
     chosen: dict[int, tuple[str, ln.Record, dict]] = {}
-    for record in ln.Record.filter(type=runs, is_type=False):
-        values = record.features.get_values()
+    for record in measurement_records(runs):
+        values = observation_values(record)
         if values.get("succeeded") is not True:
             continue
-        if not matches_analysis_workload((record.run.params or {}) if record.run else {}):
+        if not matches_analysis_workload(
+            (record.run.params or {}) if record.run else {}
+        ):
             continue
         n_rows = as_int(values.get("n_rows"), f"{record.name} n_rows")
         stamp = str(values.get("started_at") or "")
@@ -268,7 +264,7 @@ def latest_runs(runs: ln.Record) -> list[tuple[ln.Record, dict, int]]:
         if current is None or stamp >= current[0]:
             chosen[n_rows] = (stamp, record, values)
     if not chosen:
-        sys.exit(f"no succeeded runs for {NAME}")
+        sys.exit(f"no completed measurements for {NAME}")
     return [
         (record, values, n_rows)
         for n_rows, (_stamp, record, values) in sorted(chosen.items())

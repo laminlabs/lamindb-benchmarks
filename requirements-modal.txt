@@ -348,7 +348,9 @@ six==1.17.0
 soupsieve==3.0.3
     # via beautifulsoup4
 sqlparse==0.6.0
-    # via django
+    # via
+    #   django
+    #   notion-benchmarking
 storage3==2.24.0
     # via supabase
 strenum==0.4.15
