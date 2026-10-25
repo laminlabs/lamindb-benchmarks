@@ -5,7 +5,7 @@ pandas. The timed statement is the SQL a page would run. No extra index or
 table is created.
 
 Usage:
-  python experiments/experiment_003/query.py
+  python experiments/experiment_003/run.py CONFIG OUTPUT_DIRECTORY
 """
 from __future__ import annotations
 
@@ -190,7 +190,3 @@ def _print_written(written: Path | None) -> None:
         if written is None
         else f"measurement written: {written.name}"
     )
-
-
-if __name__ == "__main__":
-    main()

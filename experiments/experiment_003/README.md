@@ -22,11 +22,22 @@ LIMIT 50;
 
 One `EXPLAIN (ANALYZE, BUFFERS)` records whether that sort spilled to disk. It is not part of the latency sample.
 
+## Execution and observations
+
+The single entry point is `run.py CONFIG OUTPUT_DIRECTORY`. Population and
+query logic live in helper modules, called by that one script. On success it
+publishes `OUTPUT_DIRECTORY/observations/exp_3_n_rows_<population>/` by
+atomically renaming a temporary directory. Only the parent runner uploads the
+files and creates the observation record. Measurement metadata is stored in
+the parquet columns; the observation links these artifacts to the tracked
+execution. Earlier historical measurements linked directly to run records
+remain supported by the analysis scripts.
+
 ## Instance setup
 
-The database under test is the load instance, `laminlabs/lamindb-load-test`. A batch wipes it before every config, so each size starts empty. The wipe truncates user tables and write events. It keeps bionty, migrations, users, storage, runs, and transforms. It does not drop indexes. This experiment creates no index and no extra table, so a later experiment is not left with one.
+The database under test is the load instance, `laminlabs/lamindb-load-test`. Reset it explicitly when a fresh population is required; the runner does not wipe it. The wipe truncates user tables and write events. It keeps bionty, migrations, users, storage, runs, and transforms. It does not drop indexes. This experiment creates no index and no extra table, so a later experiment is not left with one.
 
-`setup.py` then builds the sheet on that empty instance:
+The population helper builds the sheet before query measurements:
 
 - One record type, `Samples`.
 - One feature, `collected_on`, dtype `date`, and a schema on the type that contains it.

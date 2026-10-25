@@ -21,6 +21,11 @@ import lamindb as ln
 import pandas as pd
 import plotly.graph_objects as go
 
+from benchmarks.analysis_inputs import (
+    measurement_records,
+    measurement_values,
+    observation_values,
+)
 from benchmarks.config import (
     BENCHMARK_INSTANCE,
     BENCHMARK_INSTANCE_ENV,
@@ -103,13 +108,13 @@ def load_samples(runs: ln.Record) -> pd.DataFrame:
     selected = {record.uid: n_rows for record, _values, n_rows in latest_runs(runs)}
     spills = _spills(runs, feature, selected)
     rows: list[dict] = []
-    for record in ln.Record.filter(type=runs, is_type=False):
+    for record in measurement_records(runs):
         if record.uid not in selected:
             continue
         n_rows = selected[record.uid]
         print(f"using {record.name} for {n_rows} records")
         for artifact in measurements(record, feature):
-            values = artifact.features.get_values()
+            values = measurement_values(artifact)
             if values.get("query_name") != QUERY_NAME:
                 continue
             if values.get("measurement_kind") not in (None, "page"):
@@ -206,8 +211,8 @@ def upload(samples: pd.DataFrame, plot: go.Figure, instance: str):
 
 def latest_runs(runs: ln.Record) -> list[tuple[ln.Record, dict, int]]:
     chosen: dict[int, tuple[str, ln.Record, dict]] = {}
-    for record in ln.Record.filter(type=runs, is_type=False):
-        values = record.features.get_values()
+    for record in measurement_records(runs):
+        values = observation_values(record)
         if values.get("succeeded") is not True:
             continue
         n_rows = _as_int(values.get("n_rows"), f"{record.name} n_rows")
@@ -227,11 +232,11 @@ def _spills(
     runs: ln.Record, feature: ln.Feature, selected: dict[str, int]
 ) -> dict[int, bool]:
     found: dict[int, bool] = {}
-    for record in ln.Record.filter(type=runs, is_type=False):
+    for record in measurement_records(runs):
         if record.uid not in selected:
             continue
         for artifact in measurements(record, feature):
-            values = artifact.features.get_values()
+            values = measurement_values(artifact)
             if values.get("query_name") != f"explain_{QUERY_NAME}":
                 continue
             if "spilled_to_disk" in values:

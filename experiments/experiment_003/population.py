@@ -5,7 +5,7 @@ collected_on row, so ordering the sheet is a left join with nulls. Does not
 call ln.track(): the load instance cannot finish while its Storage row is missing.
 
 Usage:
-  python experiments/experiment_003/setup.py
+  python experiments/experiment_003/run.py CONFIG OUTPUT_DIRECTORY
 """
 from __future__ import annotations
 
@@ -191,7 +191,3 @@ def ensure_feature(name: str, dtype: object) -> ln.Feature:
             )
         return feature
     return ln.Feature(name=name, dtype=dtype).save()
-
-
-if __name__ == "__main__":
-    main()
