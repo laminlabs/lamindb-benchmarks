@@ -6,7 +6,7 @@ first, because a wipe does not. Does not call ln.track(): the load instance
 cannot finish while its Storage row is missing.
 
 Usage:
-  python experiments/experiment_004/setup.py
+  python experiments/experiment_004/run.py CONFIG OUTPUT_DIRECTORY
 """
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ for _path in (_ROOT, _HERE):
         sys.path.insert(0, str(_path))
 
 import lamindb as ln
+from ddl import drop_leftovers, require_postgres
 
 from benchmarks.config import (
     LOAD_INSTANCE,
@@ -30,7 +31,6 @@ from benchmarks.config import (
     require_int,
 )
 from benchmarks.measurements import write_measurement
-from ddl import drop_leftovers, require_postgres
 
 NAME = Path(__file__).resolve().parent.name
 SUBJECTS = "Subjects"
@@ -157,7 +157,3 @@ def ensure_feature(name: str, sites: ln.Record) -> ln.Feature:
             )
         return feature
     return ln.Feature(name=name, dtype=sites).save()
-
-
-if __name__ == "__main__":
-    main()

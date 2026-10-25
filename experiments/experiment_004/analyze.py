@@ -22,6 +22,11 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from benchmarks.analysis_inputs import (
+    measurement_records,
+    measurement_values,
+    observation_values,
+)
 from benchmarks.config import (
     BENCHMARK_INSTANCE,
     BENCHMARK_INSTANCE_ENV,
@@ -115,13 +120,13 @@ def load_samples(runs: ln.Record) -> tuple[pd.DataFrame, pd.DataFrame]:
     selected = {record.uid: n_rows for record, _values, n_rows in latest_runs(runs)}
     latency: list[dict] = []
     sizes: list[dict] = []
-    for record in ln.Record.filter(type=runs, is_type=False):
+    for record in measurement_records(runs):
         if record.uid not in selected:
             continue
         n_rows = selected[record.uid]
         print(f"using {record.name} for {n_rows} subjects")
         for artifact in measurements(record, feature):
-            values = artifact.features.get_values()
+            values = measurement_values(artifact)
             query_name = values.get("query_name")
             if query_name in INSERTS and values.get("measurement_kind") == "insert":
                 latency.extend(_latency_rows(run_uid_of(record), n_rows, query_name, artifact))
@@ -294,8 +299,8 @@ def _svg(plot: go.Figure, key: str, description: str, features: dict) -> ln.Arti
 
 def latest_runs(runs: ln.Record) -> list[tuple[ln.Record, dict, int]]:
     chosen: dict[int, tuple[str, ln.Record, dict]] = {}
-    for record in ln.Record.filter(type=runs, is_type=False):
-        values = record.features.get_values()
+    for record in measurement_records(runs):
+        values = observation_values(record)
         if values.get("succeeded") is not True:
             continue
         n_rows = _as_int(values.get("n_rows"), f"{record.name} n_rows")

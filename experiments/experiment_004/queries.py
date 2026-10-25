@@ -6,7 +6,7 @@ batch is used only to measure the populated index, then deleted. Drops the
 index and the column before exiting, including on failure.
 
 Usage:
-  python experiments/experiment_004/query.py
+  python experiments/experiment_004/run.py CONFIG OUTPUT_DIRECTORY
 """
 from __future__ import annotations
 
@@ -21,15 +21,6 @@ for _path in (_ROOT, _HERE):
         sys.path.insert(0, str(_path))
 
 import lamindb as ln
-
-from benchmarks.config import (
-    LOAD_INSTANCE,
-    LOAD_INSTANCE_ENV,
-    instance_from_env,
-    read_config,
-    require_int,
-)
-from benchmarks.measurements import write_measurement
 from ddl import (
     COLUMN,
     INDEX_NAME,
@@ -41,6 +32,15 @@ from ddl import (
     relation_size,
     require_postgres,
 )
+
+from benchmarks.config import (
+    LOAD_INSTANCE,
+    LOAD_INSTANCE_ENV,
+    instance_from_env,
+    read_config,
+    require_int,
+)
+from benchmarks.measurements import write_measurement
 
 NAME = Path(__file__).resolve().parent.name
 SUBJECTS = "Subjects"
@@ -384,7 +384,3 @@ def _print_written(written: Path | None) -> None:
         if written is None
         else f"measurement written: {written.name}"
     )
-
-
-if __name__ == "__main__":
-    main()

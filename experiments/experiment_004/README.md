@@ -10,6 +10,17 @@ Measures the insert cost of a partial unique index that allows one `to_one` link
 
 The column add is timed separately. On Postgres 11 or newer a constant default is often metadata-only, so the byte change on an empty link table can be 0. After the timed repetitions, one batch is committed only to measure the index with rows in it, then those links are deleted. That batch is not part of the latency sample.
 
+## Execution and observations
+
+The single entry point is `run.py CONFIG OUTPUT_DIRECTORY`. Population and
+query logic live in helper modules, called by that one script. On success it
+publishes `OUTPUT_DIRECTORY/observations/exp_4_n_rows_<population>/` by
+atomically renaming a temporary directory. Only the parent runner uploads the
+files and creates the observation record. Measurement metadata is stored in
+the parquet columns; the observation links these artifacts to the tracked
+execution. Earlier historical measurements linked directly to run records
+remain supported by the analysis scripts.
+
 ## Schema
 
 The load instance is Postgres. RLS stays enabled for the inserts. The column and index are added with the root database user, because the load user cannot alter the table and a Django transaction can roll the DDL back. The root connection is autocommit. After each DDL call the process reconnects as the load user.
