@@ -19,15 +19,3 @@ COLORS = {
     "interventions_by_gene": "#17becf",
     "interventions_by_gene_protocol_time": "#8c564b",
 }
-
-SYMBOLS = {
-    "uid_lookup": "circle",
-    "uid_with_features": "square",
-    "uid_batch_with_features": "diamond",
-    "recent_by_treatment_started_at": "triangle-up",
-    "recent_by_created_at": "cross",
-    "interventions_by_gene": "hexagon",
-    "interventions_by_gene_protocol_time": "star",
-}
-
-LOOKUPS = tuple(LABELS)
