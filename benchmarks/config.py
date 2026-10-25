@@ -1,4 +1,5 @@
 """Read benchmark parameters from a YAML config."""
+
 from __future__ import annotations
 
 import os
@@ -13,6 +14,17 @@ LOAD_INSTANCE = "laminlabs/lamindb-load-test"
 BENCHMARK_INSTANCE_ENV = "LAMIN_CURRENT_INSTANCE"
 LOAD_INSTANCE_ENV = "LAMIN_LOAD_INSTANCE"
 CONFIG_ENV = "BENCHMARK_CONFIG"
+EXECUTION_ENVIRONMENT_ENV = "BENCHMARK_EXECUTION_ENVIRONMENT"
+
+
+def execution_environment() -> str:
+    """The launcher supplies Modal explicitly; direct CLI runs default to local."""
+    value = os.environ.get(EXECUTION_ENVIRONMENT_ENV) or (
+        "modal" if os.environ.get("MODAL_TASK_ID") else "local"
+    )
+    if value not in {"local", "modal"}:
+        raise ValueError(f"{EXECUTION_ENVIRONMENT_ENV} must be local or modal")
+    return value
 
 
 def run_name(params: dict, *, default: str) -> str:

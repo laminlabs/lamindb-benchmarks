@@ -1,4 +1,5 @@
 """Capture immutable Git references for a benchmark and its editable packages."""
+
 from __future__ import annotations
 
 import importlib.metadata
@@ -65,8 +66,14 @@ def repository_provenance(root: Path) -> dict:
     """Capture repository metadata locally, without uploading Git history."""
     revision = git_revision(root)
     revision["published"] = bool(
-        _git(root, "for-each-ref", "--format=%(refname)",
-             "--contains", revision["commit"], "refs/remotes/origin")
+        _git(
+            root,
+            "for-each-ref",
+            "--format=%(refname)",
+            "--contains",
+            revision["commit"],
+            "refs/remotes/origin",
+        )
     )
     return revision
 
@@ -80,8 +87,12 @@ def _repository_provenance(root: Path) -> dict:
     except (OSError, ValueError) as error:
         raise ValueError("Cannot read the supplied Git provenance snapshot") from error
     fields = {
-        "repository": str, "commit": str, "url": str,
-        "dirty": bool, "changes": list, "published": bool,
+        "repository": str,
+        "commit": str,
+        "url": str,
+        "dirty": bool,
+        "changes": list,
+        "published": bool,
     }
     if not isinstance(revision, dict) or any(
         not isinstance(revision.get(key), dtype) for key, dtype in fields.items()
@@ -97,7 +108,14 @@ def _repository_provenance(root: Path) -> dict:
 def editable_dependencies() -> dict:
     """The lockfile's editable paths alone do not identify their source revisions."""
     packages = {}
-    for name in ("lamindb-core", "lamindb-setup", "lamin-cli", "lamin-utils", "bionty", "pertdb"):
+    for name in (
+        "lamindb-core",
+        "lamindb-setup",
+        "lamin-cli",
+        "lamin-utils",
+        "bionty",
+        "pertdb",
+    ):
         distribution = importlib.metadata.distribution(name)
         source = json.loads(distribution.read_text("direct_url.json") or "{}")
         item = {"version": distribution.version}
@@ -117,24 +135,36 @@ def benchmark_provenance(root: Path, experiment: Path, config: Path) -> dict:
         experiment_path = experiment.resolve().relative_to(root).as_posix()
         config_path = config.resolve().relative_to(root).as_posix()
     except ValueError as error:
-        raise ValueError("The experiment and config must be inside the Git repository") from error
-    for required in ("benchmarks/run_benchmark.py", f"{experiment_path}/setup.py",
-                     f"{experiment_path}/query.py", config_path, "pyproject.toml", "uv.lock"):
+        raise ValueError(
+            "The experiment and config must be inside the Git repository"
+        ) from error
+    for required in (
+        "benchmarks/run_benchmark.py",
+        f"{experiment_path}/run.py",
+        config_path,
+        "pyproject.toml",
+        "uv.lock",
+    ):
         if not (root / required).is_file():
             raise ValueError(f"Required benchmark file is missing: {required}")
     revision = _repository_provenance(root)
     base = revision["repository"]
     blob = f"{base}/blob/{revision['commit']}"
     dependencies = editable_dependencies()
-    revision.update({
-        "experiment_path": experiment_path,
-        "experiment_url": f"{revision['url']}/{quote(experiment_path, safe='/')}",
-        "config_path": config_path,
-        "config_url": f"{blob}/{quote(config_path, safe='/')}",
-        "runner_url": f"{blob}/benchmarks/run_benchmark.py",
-        "editable_dependencies": dependencies,
-        "editable_dependencies_clean": all(not item.get("dirty", False) for item in dependencies.values()),
-    })
+    revision.update(
+        {
+            "experiment_path": experiment_path,
+            "experiment_url": f"{revision['url']}/{quote(experiment_path, safe='/')}",
+            "config_path": config_path,
+            "config_url": f"{blob}/{quote(config_path, safe='/')}",
+            "runner_url": f"{blob}/benchmarks/run_benchmark.py",
+            "transform_url": f"{blob}/{quote(experiment_path, safe='/')}/run.py",
+            "editable_dependencies": dependencies,
+            "editable_dependencies_clean": all(
+                not item.get("dirty", False) for item in dependencies.values()
+            ),
+        }
+    )
     return revision
 
 
@@ -144,6 +174,6 @@ def attach_git_provenance(run, provenance: dict) -> None:
     run.reference_type = "url"
     run.extra_data = {**(run.extra_data or {}), "git": provenance}
     run.save(update_fields=["reference", "reference_type", "extra_data"])
-    run.transform.reference = provenance["runner_url"]
+    run.transform.reference = provenance.get("transform_url", provenance["runner_url"])
     run.transform.reference_type = "url"
     run.transform.save(update_fields=["reference", "reference_type"])

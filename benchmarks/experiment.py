@@ -1,12 +1,13 @@
 """Create or update the record page for an experiment folder.
 
-An experiment is a folder with a README, setup.py, and query.py. README
+An experiment is a folder with a README and run.py. README
 frontmatter supplies the description. The README body is the notes. Load
 Benchmarks is the parent type. The experiment record is a page under that
 parent. Its runs
 child is the record frame for benchmark runs. Its analysis child is the
 record frame for analysis records, which link the artifacts they produced.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -28,6 +29,7 @@ from benchmarks.config import (
     BENCHMARK_INSTANCE_ENV,
     instance_from_env,
     read_config,
+    resolve_parameters,
     run_name,
 )
 
@@ -38,8 +40,8 @@ RUN_INDEX = "name"
 RUN_UID = "run_uid"
 ANALYSIS_INDEX = "analysis_uid"
 README = "README.md"
-SETUP_SCRIPT = "setup.py"
-QUERY_SCRIPT = "query.py"
+RUN_SCRIPT = "run.py"
+OBSERVATIONS_TYPE = "observations"
 # name, stored dtype, constructor dtype, description
 RUN_FEATURES = (
     (
@@ -49,6 +51,7 @@ RUN_FEATURES = (
         "Start time of the benchmark run.",
     ),
     ("succeeded", "bool", bool, "Whether the benchmark run exited zero."),
+    ("environment", "str", str, "Execution environment: local or modal."),
     (
         "artifact",
         "list[cat[Artifact]]",
@@ -76,7 +79,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "experiment",
-        help="Path to an experiment folder with a README, setup.py, and query.py.",
+        help="Path to an experiment folder with a README and run.py.",
     )
     return parser.parse_args(argv)
 
@@ -88,16 +91,11 @@ def experiment_path(raw: str) -> Path:
     path = path.resolve()
     if not path.is_dir():
         sys.exit(f"experiment folder not found: {path}")
-    required = (README, SETUP_SCRIPT, QUERY_SCRIPT)
+    required = (README, RUN_SCRIPT)
     missing = [name for name in required if not (path / name).is_file()]
     if missing:
         sys.exit(f"experiment folder is missing {', '.join(missing)}: {path}")
     return path
-
-
-def stage_scripts(folder: Path) -> tuple[Path, Path]:
-    """setup.py then query.py. Caller must already have validated the folder."""
-    return folder / SETUP_SCRIPT, folder / QUERY_SCRIPT
 
 
 def relative_reference(path: Path) -> str:
@@ -107,7 +105,9 @@ def relative_reference(path: Path) -> str:
         return path.as_posix()
 
 
-def record_by_name(name: str, *, type_record: ln.Record | None = None) -> ln.Record | None:
+def record_by_name(
+    name: str, *, type_record: ln.Record | None = None
+) -> ln.Record | None:
     query = ln.Record.filter(name=name)
     if type_record is not None:
         query = query.filter(type=type_record)
@@ -138,7 +138,9 @@ def set_notes(record: ln.Record, content: str | None) -> None:
     if block is None:
         if not content:
             return
-        block = ln.models.RecordBlock(record=record, content=content, kind="readme").save()
+        block = ln.models.RecordBlock(
+            record=record, content=content, kind="readme"
+        ).save()
     if block.content == content:
         return
     block.content = content
@@ -155,11 +157,20 @@ def feature_dtype(value: object) -> str:
         return "float"
     if isinstance(value, str):
         return "str"
-    sys.exit(f"config values must be strings, numbers, or booleans, got {value!r}")
+    if isinstance(value, list):
+        if not value:
+            return "list[str]"
+        kinds = {feature_dtype(item) for item in value}
+        if len(kinds) != 1:
+            raise ValueError("Feature lists must contain values of one type")
+        return f"list[{kinds.pop()}]"
+    if isinstance(value, dict):
+        return "dict"
+    raise ValueError(f"Unsupported config or manifest feature value: {value!r}")
 
 
 def config_columns(params: dict) -> dict[str, object]:
-    """Scalar experiment parameters that become columns on each run record."""
+    """Experiment parameters that become columns on each run record."""
     run_name(params, default="unnamed")
     columns = {}
     for key, value in params.items():
@@ -184,14 +195,20 @@ _PY_DTYPES = {"bool": bool, "int": int, "float": float, "str": str}
 
 
 def ensure_feature(name: str, dtype: str) -> ln.Feature:
-    matches = ln.Feature.filter(name=name, is_type=False).to_list()
-    if not matches:
-        return ln.Feature(name=name, dtype=_PY_DTYPES[dtype]).save()
-    if len(matches) > 1:
-        sys.exit(f"multiple features named {name!r}")
-    feature = matches[0]
+    # Lists may share a display name with historical scalar parameters. Scope
+    # these features by dtype rather than changing the global scalar feature.
+    kind = (
+        ensure_feature_type(f"Benchmark {dtype} parameters")
+        if dtype.startswith("list[") or dtype == "dict"
+        else None
+    )
+    feature = ln.Feature.filter(name=name, type=kind, is_type=False).one_or_none()
+    if feature is None:
+        return ln.Feature(name=name, dtype=dtype, type=kind).save()
     if feature.dtype_as_str != dtype:
-        sys.exit(f"feature {name!r} has dtype {feature.dtype_as_str}, not {dtype}")
+        raise ValueError(
+            f"Feature {name!r} has dtype {feature.dtype_as_str}, expected {dtype}"
+        )
     return feature
 
 
@@ -314,7 +331,9 @@ def _migrate_run_name_index(frame: ln.Record, index: ln.Feature) -> None:
             # migrates run_uid out of Record.name and promotes this name into it.
             name = record.name
             if record.run_id is not None:
-                name = record.run.name or run_name(record.run.params or {}, default=name)
+                name = record.run.name or run_name(
+                    record.run.params or {}, default=name
+                )
             names.append(ln.models.RecordJson(record=record, feature=index, value=name))
         # Write only the new index values. Replacing all feature annotations
         # would unnecessarily rewrite every artifact link and be slow remotely.
@@ -362,29 +381,30 @@ def ensure_run_schema(
         frame.save()
     else:
         _migrate_run_name_index(frame, index)
-        members = list(schema.members.all())
-        present = {feature.name for feature in members}
-        missing = [feature for name, feature in features.items() if name not in present]
-        extra = [
-            feature
-            for feature in members
-            if feature.uid != index.uid and feature.name not in features
-        ]
-        if missing or extra:
-            if ln.Record.filter(schema=schema).exclude(pk=frame.pk).exists():
-                sys.exit(f"schema {schema.uid} is shared; refusing to change columns")
-            if missing:
-                schema.add(missing)
-            _migrate_failed_column(frame, members, features["succeeded"])
-            if extra:
-                optional_uids = set(schema.optionals.get_uids())
-                stale_optional = [
-                    feature for feature in extra if feature.uid in optional_uids
-                ]
-                if stale_optional:
-                    schema.optionals.remove(stale_optional)
-                schema.remove(extra)
-                _clear_feature_values(frame, extra)
+        from django.db import transaction
+
+        members = {feature.name: feature for feature in schema.members.all()}
+        for name, feature in features.items():
+            old = members.get(name)
+            if old is not None and old.uid != feature.uid:
+                if old.dtype_as_str != "int" or feature.dtype_as_str != "list[int]":
+                    raise ValueError(
+                        f"Cannot change run column {name!r} from {old.dtype_as_str} to {feature.dtype_as_str}"
+                    )
+                # Preserve historical scalar counts as singleton lists only in
+                # this experiment's run sheet; other sheets keep their int feature.
+                with transaction.atomic(using=frame._state.db):
+                    schema.optionals.remove(old)
+                    schema.remove(old)
+                    schema.add(feature)
+                    for row in ln.models.RecordJson.filter(
+                        record__type=frame, feature=old
+                    ):
+                        row.feature, row.value = feature, [row.value]
+                        row.save()
+            elif old is None:
+                schema.add(feature)
+        # Never delete historical columns/values when a new config omits them.
     return index, features
 
 
@@ -518,6 +538,7 @@ def record_run(
     *,
     instance: str,
     exit_code: int | None = None,
+    run: ln.Run | None = None,
 ) -> ln.Record:
     """Create or update the data record for the active benchmark run.
 
@@ -528,24 +549,35 @@ def record_run(
     Re-entering the same Lamin run updates that record instead of adding
     another row.
     """
-    run = ln.context.run
+    run = run or ln.context.run
     if run is None:
         sys.exit("record_run requires an active ln.track() run")
     if run.started_at is None:
         sys.exit("benchmark run has no start time")
     runs = ensure_runs_frame(experiment)
-    columns = config_columns(params)
+    information = (run.extra_data or {}).get("run_info", {})
+    if set(information) & set(params):
+        raise ValueError("Run information must not overwrite config parameters")
+    columns = config_columns({**params, **information})
     index, features = ensure_run_schema(runs, columns)
+    extra = run.extra_data or {}
+    environment = extra.get("environment", "modal" if extra.get("modal") else "local")
+    if environment not in {"local", "modal"}:
+        raise ValueError("Run environment must be local or modal")
     name = run_name(params, default=run.uid)
     if run.name != name:
         run.name = name
         run.save(update_fields=["name"])
+    for key, value in list(columns.items()):
+        if features[key].dtype_as_str == "list[int]" and isinstance(value, int):
+            columns[key] = [value]
     values = {
         index: name,
         features[RUN_UID]: run.uid,
         **{features[name]: value for name, value in columns.items()},
         features["started_at"]: naive_utc(run.started_at),
-        features["succeeded"]: exit_code in (None, 0),
+        features["succeeded"]: exit_code == 0,
+        features["environment"]: environment,
     }
     if artifacts:
         values[features["artifact"]] = artifacts
@@ -585,6 +617,110 @@ def record_run(
     if not runs.input_of_runs.filter(pk=run.pk).exists():
         runs.input_of_runs.add(run)
     _link_run_artifacts(record, features["artifact"], artifacts)
+    return record
+
+
+def ensure_observation_frame(experiment: ln.Record) -> ln.Record:
+    frame = ensure_type(OBSERVATIONS_TYPE, type_record=experiment)
+    metadata = run_metadata_features()
+    run_type = ensure_runs_frame(experiment)
+    scope = ensure_feature_type(f"{experiment.name} observation links")
+    link = ln.Feature.filter(
+        name="experiment_run", type=scope, is_type=False
+    ).one_or_none()
+    if link is None:
+        link = ln.Feature(name="experiment_run", dtype=run_type, type=scope).save()
+    observation_link = ln.Feature.filter(
+        name="observation", type=scope, is_type=False
+    ).one_or_none()
+    if observation_link is None:
+        observation_link = ln.Feature(
+            name="observation", dtype=frame, type=scope
+        ).save()
+    recorded_at = ln.Feature.filter(
+        name="recorded_at", type=scope, is_type=False
+    ).one_or_none()
+    if recorded_at is None:
+        recorded_at = ln.Feature(name="recorded_at", dtype=datetime, type=scope).save()
+    columns = [observation_link, recorded_at, link, metadata["artifact"]]
+    if frame.schema is None:
+        frame.schema = ln.Schema(
+            [feature.with_config(optional=True) for feature in columns],
+            name=f"{experiment.name} observations",
+        ).save()
+        frame.save()
+    else:
+        present = {feature.uid for feature in frame.schema.members.all()}
+        missing = [feature for feature in columns if feature.uid not in present]
+        if missing:
+            frame.schema.add(missing)
+    schema = frame.schema
+    first = [observation_link.uid, recorded_at.uid]
+    order = first + [
+        feature.uid for feature in schema.members.all() if feature.uid not in first
+    ]
+    # LaminDB 2.12 stores schema column display order as feature UIDs in af/2.
+    aux = dict(schema._aux or {})
+    config = dict(aux.get("af") or {})
+    if config.get("2") != order:
+        schema._aux = {**aux, "af": {**config, "2": order}}
+        schema.save(update_fields=["_aux"])
+    return frame
+
+
+def record_observation(
+    experiment, run_record, name, values, artifacts, notes, instance
+):
+    from benchmarks.observations import observation_timestamp
+
+    frame = ensure_observation_frame(experiment)
+    schema = frame.schema
+    members = {feature.name: feature for feature in schema.members.all()}
+    values = dict(values)
+    timestamp = values.pop("recorded_at", None)
+    run = ln.context.run
+    record = ln.Record.filter(type=frame, run=run, name=name).one_or_none()
+    recorded_at = (
+        observation_timestamp(timestamp)
+        if timestamp is not None
+        else (record.created_at if record is not None else datetime.now(UTC))
+    )
+    annotations = {
+        members["experiment_run"]: run_record,
+        members["recorded_at"]: naive_utc(recorded_at),
+    }
+    for key, value in values.items():
+        if value is None:
+            continue
+        dtype = feature_dtype(value)
+        feature = members.get(key)
+        if feature is None:
+            feature = ensure_feature(key, dtype)
+            schema.add(feature)
+        elif feature.dtype_as_str != dtype:
+            raise ValueError(f"Observation feature {key!r} changed type")
+        annotations[feature] = value
+    annotations[members["artifact"]] = artifacts
+    if record is None:
+        record = ln.Record(
+            name=name,
+            type=frame,
+            _search_names=False,
+            features=annotations,
+            reference=f"https://lamin.ai/{instance}/run/{run.uid}",
+            reference_type="url",
+        )
+        record.run = run
+        record.save()
+    if timestamp is None:
+        annotations[members["recorded_at"]] = naive_utc(record.created_at)
+    annotations[members["observation"]] = record
+    record.features.set_values(annotations)
+    # Creator provenance lives in record.run and the experiment_run feature.
+    # Tagging the entire run here would include every milestone's artifacts in
+    # the observation's Artifacts tab, rather than just its direct file links.
+    _link_run_artifacts(record, members["artifact"], artifacts)
+    set_notes(record, notes)
     return record
 
 
@@ -683,7 +819,9 @@ def _link_run_artifacts(
         if not ln.models.RecordArtifact.filter(
             record=record, feature=feature, value=artifact
         ).exists():
-            sys.exit(f"artifact {artifact.uid} was not linked on run record {record.uid}")
+            sys.exit(
+                f"artifact {artifact.uid} was not linked on run record {record.uid}"
+            )
 
 
 def experiment_docs(folder: Path) -> tuple[str, str]:
@@ -693,7 +831,11 @@ def experiment_docs(folder: Path) -> tuple[str, str]:
     if not lines or lines[0].strip() != "---":
         sys.exit(f"experiment README is missing frontmatter: {path}")
     end = next(
-        (index for index, line in enumerate(lines[1:], start=1) if line.strip() == "---"),
+        (
+            index
+            for index, line in enumerate(lines[1:], start=1)
+            if line.strip() == "---"
+        ),
         None,
     )
     if end is None:
@@ -729,6 +871,7 @@ def sync_experiment(path: Path, params: dict | None = None) -> ln.Record:
     set_notes(experiment, notes)
     runs = ensure_runs_frame(experiment)
     ensure_analysis_frame(experiment)
+    ensure_observation_frame(experiment)
     if params is not None:
         ensure_run_schema(runs, config_columns(params))
     return experiment
@@ -737,7 +880,7 @@ def sync_experiment(path: Path, params: dict | None = None) -> ln.Record:
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     path = experiment_path(args.experiment)
-    params = read_config()
+    params = resolve_parameters(path, read_config())
     instance = instance_from_env(BENCHMARK_INSTANCE_ENV, BENCHMARK_INSTANCE)
     reference = relative_reference(path)
 
@@ -746,7 +889,7 @@ def main(argv: list[str] | None = None) -> None:
     try:
         record = sync_experiment(path, params)
         print(f"experiment: https://lamin.ai/{instance}/record/{record.uid}")
-        for name in (RUNS_TYPE, ANALYSIS_TYPE):
+        for name in (RUNS_TYPE, OBSERVATIONS_TYPE, ANALYSIS_TYPE):
             child = require_child(record, name)
             kind = "frame" if child.schema is not None else "page"
             print(f"{name}: https://lamin.ai/{instance}/record/{child.uid} ({kind})")
