@@ -33,7 +33,7 @@ Or run on Modal in the `Benchmarks` environment, with the `lamin-benchmarks`
 secret containing `LAMIN_API_KEY`:
 
 ```sh
-modal run --env Benchmarks benchmarks/modal_benchmarks.py \
+uv run --with modal python -m modal run --env Benchmarks benchmarks/modal_benchmarks.py \
   --config experiments/record_scalability/config/my_run.yml --region eu-west
 ```
 
