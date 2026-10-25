@@ -5,7 +5,7 @@ benchmark config. The load instance is LAMIN_LOAD_INSTANCE or
 laminlabs/lamindb-load-test.
 
 Usage:
-  python experiments/experiment_001/setup.py
+  python experiments/experiment_001/run.py CONFIG OUTPUT_DIRECTORY
 """
 from __future__ import annotations
 
@@ -38,7 +38,3 @@ def main() -> None:
     create_records(n_rows, name_prefix=NAME_PREFIX)
     print(f"setup created {n_rows} records")
     # ln.finish()
-
-
-if __name__ == "__main__":
-    main()

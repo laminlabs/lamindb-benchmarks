@@ -5,7 +5,7 @@ the benchmark config. Writes a measurement parquet when the runner sets
 BENCHMARK_RESULTS_DIR.
 
 Usage:
-  python experiments/experiment_001/query.py
+  python experiments/experiment_001/run.py CONFIG OUTPUT_DIRECTORY
 """
 from __future__ import annotations
 
@@ -68,7 +68,3 @@ def main() -> None:
         else f"measurement written: {written.name}"
     )
     # ln.finish()
-
-
-if __name__ == "__main__":
-    main()

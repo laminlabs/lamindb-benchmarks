@@ -21,6 +21,11 @@ import lamindb as ln
 import pandas as pd
 import plotly.graph_objects as go
 
+from benchmarks.analysis_inputs import (
+    measurement_records,
+    measurement_values,
+    observation_values,
+)
 from benchmarks.config import (
     BENCHMARK_INSTANCE,
     BENCHMARK_INSTANCE_ENV,
@@ -84,8 +89,8 @@ def load_samples(experiment: ln.Record) -> pd.DataFrame:
     artifact_feature = schema_feature(experiment, "artifact")
     rows: list[dict] = []
     succeeded = 0
-    for record in ln.Record.filter(type=experiment, is_type=False):
-        values = record.features.get_values()
+    for record in measurement_records(experiment):
+        values = observation_values(record)
         if values.get("succeeded") is not True:
             continue
         succeeded += 1
@@ -129,7 +134,7 @@ def summarize(samples: pd.DataFrame) -> pd.DataFrame:
                 "query_name": query_name,
                 "n_rows": int(n_rows),
                 "n_runs": int(group["run_uid"].nunique()),
-                "n_observations": int(len(latency)),
+                "n_observations": len(latency),
                 "latency_mean_ms": float(latency.mean()),
                 "latency_median_ms": float(latency.median()),
                 "latency_std_ms": std,
@@ -268,7 +273,7 @@ def _measurements(record: ln.Record, feature: ln.Feature) -> list[ln.Artifact]:
 
 
 def _query_name(artifact: ln.Artifact) -> str:
-    value = artifact.features.get_values().get("query_name")
+    value = measurement_values(artifact).get("query_name")
     if isinstance(value, str) and value.strip():
         return value.strip()
     stem = Path(artifact.key or artifact.uid).stem

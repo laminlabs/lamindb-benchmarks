@@ -17,6 +17,11 @@ import lamindb as ln
 import pandas as pd
 import plotly.graph_objects as go
 
+from benchmarks.analysis_inputs import (
+    measurement_records,
+    measurement_values,
+    observation_values,
+)
 from benchmarks.config import (
     BENCHMARK_INSTANCE,
     BENCHMARK_INSTANCE_ENV,
@@ -100,8 +105,8 @@ def load_samples(runs: ln.Record) -> pd.DataFrame:
         sys.exit(f"{runs.name} schema has no artifact column")
     rows: list[dict] = []
     succeeded = 0
-    for record in ln.Record.filter(type=runs, is_type=False):
-        values = record.features.get_values()
+    for record in measurement_records(runs):
+        values = observation_values(record)
         if values.get("succeeded") is not True:
             continue
         succeeded += 1
@@ -248,7 +253,7 @@ def _measurements(record: ln.Record, feature: ln.Feature) -> list[ln.Artifact]:
 
 
 def _query_name(artifact: ln.Artifact) -> str:
-    value = artifact.features.get_values().get("query_name")
+    value = measurement_values(artifact).get("query_name")
     if isinstance(value, str) and value.strip():
         return value.strip()
     stem = Path(artifact.key or artifact.uid).stem
