@@ -1,4 +1,4 @@
-"""The experiment 2 synthetic treatment, represented as Notion properties."""
+"""The record scalability synthetic treatment, represented as Notion properties."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def plain(property: dict) -> str:
 
 
 def treatment(index: int, rng, params: dict) -> dict:
-    """Match experiment 2's random call order and scalar values exactly."""
+    """Match record scalability’s random call order and scalar values exactly."""
     treated = date(2024, 1, 1) + timedelta(days=rng.randint(0, 700))
     return {
         "benchmark_uid": uid(index),

@@ -11,10 +11,15 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 
+from benchmarks.analysis_inputs import (
+    measurement_records,
+    measurement_values,
+    observation_values,
+)
 from benchmarks.config import CONFIG_ENV, read_config
-from experiments.experiment_002.workload import workload_parameters
 from experiments.experiment_005.parameters import API_VERSION
 from experiments.experiment_005.workload import NAME
+from experiments.record_scalability.workload import workload_parameters
 
 LOOKUPS = ("uid_lookup", "uid_with_features", "uid_batch_with_features")
 
@@ -67,8 +72,8 @@ def load_data(ln):
         raise ValueError("No Notion experiment has been run yet")
     runs = require_child(experiment, RUNS_TYPE)
     chosen = {}
-    for record in ln.Record.filter(type=runs, is_type=False).select_related("run"):
-        values = record.features.get_values()
+    for record in measurement_records(runs):
+        values = observation_values(record)
         if values.get("succeeded") is not True or not record.run:
             continue
         params = record.run.params or {}
@@ -108,7 +113,7 @@ def load_data(ln):
                 continue
             # Register every consumed table as an input of this analysis run.
             frame = artifact.load()
-            features = artifact.features.get_values()
+            features = measurement_values(artifact)
             if stem in LOOKUPS:
                 samples.append(
                     frame.assign(n_rows=size, query_name=stem, run_uid=record.run.uid)

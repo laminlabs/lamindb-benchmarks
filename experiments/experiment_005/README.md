@@ -1,20 +1,31 @@
 ---
-description: Experiment 2's intervention workload via the Notion REST API, tracked in LaminDB
+description: Record scalability’s intervention workload via the Notion REST API, tracked in LaminDB
 ---
 
 # Notion intervention population and lookup benchmark
 
-`experiment_005` repeats experiment 2's synthetic workload against Notion. It
+`experiment_005` repeats record scalability’s synthetic workload against Notion. It
 creates one page per intervention, with the same dose, protocol, treatment date,
 duration, supplier, and gene/molecule link ranges. The default catalogs contain
 10 suppliers, 100 genes and 20 small molecules. Each intervention links one
 supplier, 3–5 genes and 1–3 molecules. The seed and random-call order match
-experiment 2. All effective defaults are tracked on the Lamin run and run sheet.
+record scalability. All effective defaults are tracked on the Lamin run and run sheet.
 
 There are four Notion databases/data sources: `suppliers`, `genes`,
 `small_molecules`, and `interventions`, under a dedicated dataset page. Each new
 run creates its own dataset unless explicitly given an existing dataset ID.
 Nothing is reset, deleted, or written to the Lamin load-test instance.
+
+## Execution and observations
+
+The single entry point is `run.py CONFIG OUTPUT_DIRECTORY`. Population and
+query logic live in helper modules, called by that one script. On success it
+publishes `OUTPUT_DIRECTORY/observations/exp_5_n_rows_<population>/` by
+atomically renaming a temporary directory. Only the parent runner uploads the
+files and creates the observation record. Measurement metadata is stored in
+the parquet columns; the observation links these artifacts to the tracked
+execution. Earlier historical measurements linked directly to run records
+remain supported by the analysis scripts.
 
 ## Credentials and target
 
@@ -39,11 +50,11 @@ LAMIN_CURRENT_INSTANCE=laminlabs/lamindb-benchmarks \
 ```
 
 The runner resolves defaults, starts an independent experiment_005 Lamin run,
-executes setup and query in separate processes, and uploads measurement parquets
-under `benchmarks/measurements/experiment_005/<run uid>/`. They are linked from
-the experiment's runs sheet in `laminlabs/lamindb-benchmarks`. Despite the generic
-runner's load-instance environment variable, these stages never import LaminDB
-or connect to the Lamin load instance.
+executes the single experiment process, and uploads its completed observation
+under `benchmarks/measurements/experiment_005/<run uid>/observations/`.
+The observation links the measurements and experiment-run record in
+`laminlabs/lamindb-benchmarks`. The child uses Notion as its load target and
+does not connect to the Lamin load instance.
 
 ## Run on Modal
 
@@ -166,7 +177,7 @@ uv run python experiments/experiment_005/analyze_dashboard.py
 ```
 
 Each saves tables and SVGs plus an analysis-sheet row in the benchmark instance.
-Keys under `benchmarks/analysis/experiment_005/` mirror experiment 2:
+Keys under `benchmarks/analysis/experiment_005/` mirror record scalability:
 `latency_median_p95`, `latency_boxplot`, `setup_summary`, and `dashboard` (the
 latter has `dashboard_snapshot` and `dashboard_queries` tables). The dashboard
 uses Notion-available page/link counts, insert time/throughput, warm client/HTTP

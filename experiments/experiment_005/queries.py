@@ -18,7 +18,7 @@ from benchmarks.config import read_config
 from benchmarks.measurements import load_measurements, results_dir
 from experiments.experiment_005.client import NotionClient
 from experiments.experiment_005.parameters import resolve_parameters
-from experiments.experiment_005.setup import measurement
+from experiments.experiment_005.population import measurement
 from experiments.experiment_005.workload import inventory, plain, uid, uid_filter
 
 LOOKUPS = ("uid_lookup", "uid_with_features", "uid_batch_with_features")
@@ -64,7 +64,7 @@ def lookup(api, source: str, sampled: list[str], catalogs: dict, *, full: bool) 
                     )
                 row[prop] = [names[table][ref["id"]] for ref in props[prop]["relation"]]
             rows.append(row)
-        # Include decoding and DataFrame construction, as in experiment 2.
+        # Include decoding and DataFrame construction, as in record scalability.
         return len(pd.DataFrame(rows))
     return len(pages)
 
@@ -275,7 +275,3 @@ def main():
         record_health(api, params, state)
     finally:
         api.close("query")
-
-
-if __name__ == "__main__":
-    main()

@@ -14,7 +14,7 @@ if str(ROOT) not in sys.path:
 
 from benchmarks.config import read_config
 from benchmarks.measurements import results_dir, write_measurement
-from experiments.experiment_002.workload import workload_parameters
+from experiments.record_scalability.workload import workload_parameters
 from experiments.experiment_005.client import NotionClient
 from experiments.experiment_005.parameters import resolve_parameters
 from experiments.experiment_005.workload import (
@@ -280,7 +280,3 @@ def main():
         )
     finally:
         api.close("setup")
-
-
-if __name__ == "__main__":
-    main()

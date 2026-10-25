@@ -6,7 +6,7 @@ import os
 from uuid import UUID
 
 from benchmarks.config import require_int
-from experiments.experiment_002.workload import workload_parameters
+from experiments.record_scalability.workload import workload_parameters
 
 API_VERSION = "2026-03-11"
 
