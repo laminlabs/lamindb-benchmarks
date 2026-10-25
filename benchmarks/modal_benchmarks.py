@@ -1,7 +1,7 @@
 """Run a benchmark config on Modal using the project's locked Lamin release.
 
 Usage:
-    modal run --env Benchmarks benchmarks/modal_benchmarks.py --config experiments/record_scalability/example.yml --region eu-west
+    uv run --with modal python -m modal run --env Benchmarks benchmarks/modal_benchmarks.py --config experiments/record_scalability/example.yml --region eu-west
 
 Create the Modal secret lamin-benchmarks with LAMIN_API_KEY in the Benchmarks
 environment first.
@@ -14,7 +14,8 @@ folders while the experiment child runs. Runs are labelled environment=modal.
 Only benchmarks/, experiments/, pyproject.toml, and uv.lock are uploaded.
 Repository metadata is captured locally for each launch; .git is never uploaded.
 Config files must be under benchmarks/ or experiments/.
-Local config/ and configs/ folders are excluded except for the selected config.
+Local config/ and configs/ folders are excluded. The selected YAML is passed
+as a function argument and written inside the container before the runner starts.
 The default compute region is eu-west; --region overrides it.
 
 After updating project dependencies, regenerate the remote environment with:
@@ -80,7 +81,7 @@ if modal.is_local():
     retries=0,
     max_containers=1,
 )
-def run(config: str, git_provenance: dict):
+def run(config: str, config_text: str, git_provenance: dict):
     import json
     import os
     import subprocess
@@ -91,12 +92,12 @@ def run(config: str, git_provenance: dict):
         f"Modal region: {os.environ.get('MODAL_REGION', 'unknown')}; "
         f"cloud provider: {os.environ.get('MODAL_CLOUD_PROVIDER', 'unknown')}"
     )
-    root = Path(REMOTE_ROOT)
+    root = Path(REMOTE_ROOT).resolve()
     config_path = (root / config).resolve()
     if not config_path.is_relative_to(root):
         raise ValueError("Config must be inside the repository.")
-    if not config_path.is_file():
-        raise FileNotFoundError(config_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(config_text)
 
     with tempfile.TemporaryDirectory(prefix="benchmark-provenance-") as directory:
         snapshot = Path(directory) / "git.json"
@@ -160,11 +161,6 @@ def main(
             raise ValueError(f"Experiment is missing {filename}: {experiment_path}")
 
     options = {}
-    if any(part in {"config", "configs"} for part in relative_path.parts[:-1]):
-        options["image"] = image.add_local_file(
-            config_path,
-            f"{REMOTE_ROOT}/{relative_path.as_posix()}",
-        )
     if region != DEFAULT_REGION:
         options["region"] = region
     if notion_secret:
@@ -174,5 +170,7 @@ def main(
         ]
     function = run.with_options(**options) if options else run
     function.remote(
-        config=relative_path.as_posix(), git_provenance=repository_provenance(ROOT)
+        config=relative_path.as_posix(),
+        config_text=config_path.read_text(),
+        git_provenance=repository_provenance(ROOT),
     )
