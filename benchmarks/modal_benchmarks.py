@@ -1,7 +1,7 @@
 """Run a benchmark config on Modal using the project's locked Lamin release.
 
 Usage:
-    modal run --env Benchmarks benchmarks/modal_benchmarks.py --config experiments/experiment_002/example.yml --region eu-west
+    modal run --env Benchmarks benchmarks/modal_benchmarks.py --config experiments/record_scalability/example.yml --region eu-west
 
 Create the Modal secret lamin-benchmarks with LAMIN_API_KEY in the Benchmarks
 environment first.
@@ -9,6 +9,8 @@ For Notion, pass --notion-secret notion-benchmarks to mount NOTION_API_KEY and,
 optionally, NOTION_PARENT_PAGE_ID or NOTION_DATASET_PAGE_ID. The secret is only
 mounted when this option is supplied; other experiments do not need it.
 This launcher does not reset the load database.
+It launches the parent runner, which ingests run_info.yml and atomic observation
+folders while the experiment child runs. Runs are labelled environment=modal.
 Only benchmarks/, experiments/, pyproject.toml, and uv.lock are uploaded.
 Repository metadata is captured locally for each launch; .git is never uploaded.
 Config files must be under benchmarks/ or experiments/.
@@ -101,6 +103,7 @@ def run(config: str, git_provenance: dict):
         snapshot.write_text(json.dumps(git_provenance))
         env = os.environ.copy()
         env["BENCHMARK_GIT_PROVENANCE"] = str(snapshot)
+        env["BENCHMARK_EXECUTION_ENVIRONMENT"] = "modal"
         subprocess.run(
             [sys.executable, "benchmarks/run_benchmark.py", str(config_path)],
             cwd=root,
@@ -111,29 +114,65 @@ def run(config: str, git_provenance: dict):
 
 @app.local_entrypoint()
 def main(
-    config: str = "experiments/experiment_002/example.yml",
+    config: str = "experiments/record_scalability/example.yml",
     region: str = DEFAULT_REGION,
     notion_secret: str = "",
 ):
+    from benchmarks.config import read_config
     from benchmarks.provenance import repository_provenance
 
     config_path = (ROOT / config).resolve()
     if not config_path.is_relative_to(ROOT):
         raise ValueError("Config must be inside the repository.")
     relative_path = config_path.relative_to(ROOT)
-    if not relative_path.parts or relative_path.parts[0] not in {"benchmarks", "experiments"}:
+    if not relative_path.parts or relative_path.parts[0] not in {
+        "benchmarks",
+        "experiments",
+    }:
         raise ValueError("Config must be under benchmarks/ or experiments/.")
     if not config_path.is_file():
         raise FileNotFoundError(config_path)
 
+    # Validate the child contract before submitting a remote job. Parameter
+    # resolution stays remote because some experiments need mounted secrets.
+    experiment = read_config(config_path).get("experiment")
+    if (
+        not isinstance(experiment, str)
+        or not experiment.strip()
+        or Path(experiment).is_absolute()
+    ):
+        raise ValueError(
+            "Modal configs must specify a repository-relative experiment folder"
+        )
+    experiment_path = (ROOT / experiment).resolve()
+    if not experiment_path.is_relative_to(ROOT):
+        raise ValueError("Experiment must be inside the repository")
+    experiment_relative = experiment_path.relative_to(ROOT)
+    if not experiment_relative.parts or experiment_relative.parts[0] not in {
+        "benchmarks",
+        "experiments",
+    }:
+        raise ValueError(
+            "Modal experiments must be under benchmarks/ or experiments/ so their code is uploaded"
+        )
+    for filename in ("README.md", "run.py"):
+        if not (experiment_path / filename).is_file():
+            raise ValueError(f"Experiment is missing {filename}: {experiment_path}")
+
     options = {}
     if any(part in {"config", "configs"} for part in relative_path.parts[:-1]):
         options["image"] = image.add_local_file(
-            config_path, f"{REMOTE_ROOT}/{relative_path.as_posix()}",
+            config_path,
+            f"{REMOTE_ROOT}/{relative_path.as_posix()}",
         )
     if region != DEFAULT_REGION:
         options["region"] = region
     if notion_secret:
-        options["secrets"] = [modal.Secret.from_name("lamin-benchmarks"), modal.Secret.from_name(notion_secret)]
+        options["secrets"] = [
+            modal.Secret.from_name("lamin-benchmarks"),
+            modal.Secret.from_name(notion_secret),
+        ]
     function = run.with_options(**options) if options else run
-    function.remote(config=relative_path.as_posix(), git_provenance=repository_provenance(ROOT))
+    function.remote(
+        config=relative_path.as_posix(), git_provenance=repository_provenance(ROOT)
+    )
