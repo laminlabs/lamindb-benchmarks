@@ -1,227 +1,426 @@
 # LaminDB benchmarks
 
-Two LaminDB instances, two processes. Do not combine them with `.using()`.
+One config starts one tracked execution. Each experiment has one entry point,
+`run.py CONFIG OUTPUT_DIRECTORY`, and controls its own sequence of writes,
+queries, and maintenance. The parent runner uploads observations while the
+experiment is still running. There is no batch runner and no automatic reset.
 
-- The benchmark instance (`LAMIN_CURRENT_INSTANCE`, default `laminlabs/lamindb-benchmarks`) stores the experiment page, run rows, measurement artifacts, and analyses.
-- The load instance (`LAMIN_LOAD_INSTANCE`, default `laminlabs/lamindb-load-test`) receives the writes and queries under test. A batch wipes it before every config.
+## Run an experiment
 
-`benchmarks/` is the generic runner. A new experiment is a new folder under `experiments/`. Do not edit `benchmarks/` to name that experiment, add its queries, or special-case its plots. If the contract below cannot express the measurement, stop and ask before changing the runner.
-
-`experiments/experiment_001` is the small example: create plain records, time one count. `experiments/experiment_002` is the fuller example: typed records, several lookups, and facts captured during the run. `archive/` is the old study. Do not copy it into `benchmarks/`. Each experiment has a minimal tracked `example.yml`. Run-specific configs stay local in its ignored `config/` folder. Legacy root `configs/` and `config.yml` are also local and ignored.
-
-Run every command from the repository root, with the project interpreter that already has lamindb. Do not start a temporary environment.
-
-## Add an experiment
-
-1. Create `experiments/<name>/` with `README.md`, `setup.py`, and `query.py`. The folder name becomes the Lamin record name. Do not rename it after the first sync.
-2. Add a minimal `experiments/<name>/example.yml`. Put local configs in `experiments/<name>/config/`, with a `.gitignore` containing `*` and `!.gitignore`. Copy the example and change `n_rows` for each point on the ladder.
-3. Run one config with `python benchmarks/run_benchmark.py experiments/<name>/config/<file>.yml`. That syncs the page, runs setup, then query, and uploads measurements.
-4. For a ladder, `python benchmarks/batch_benchmarks.py --yes experiments/<name>/config`.
-5. After succeeded runs exist, add analysis scripts in the same folder and run them yourself. The runner does not look for them.
-
-## Folder
-
-Required:
-
-- `README.md` with YAML frontmatter. The `description` is the experiment record description. The body is its notes.
-- `setup.py` creates the load. It runs first.
-- `query.py` times the queries.
-
-Optional, and not launched by the runner:
-
-- `example.yml`, a minimal tracked config
-- `config/.gitignore`, keeping run-specific `config/*.yml` local
-- `analyze.py` and other `analyze_*.py` scripts
-- helpers such as `observe.py`, imported by `setup.py` or `query.py`
-- `parameters.py` with `resolve_parameters(params) -> dict`, a pure function that fills and validates defaults before tracking. The resolved values are saved in both the Lamin run parameters and its run-sheet row.
-
-The runner starts each script by path, so the experiment folder is not on `sys.path`. A script that imports a sibling must insert its own directory. Use the folder name as the name prefix for records this experiment creates. Do not hardcode `experiment_001` or `experiment_002` in shared code.
-
-The README body describes the measurement: what is timed, why the comparison stays fair, each parameter, each query with a one-line example, and each artifact. It does not describe the runner, the two instances, or how to invoke `benchmarks/`.
-
-```markdown
----
-description: Count latency as the number of records grows
----
-
-# Count latency as the number of records grows
-
-What the timed query measures, and why the comparison stays fair as the registry grows.
-
-## Parameters
-
-- `n_rows`: How many records to create before timing the query. Integer, at least 0.
-```
-
-Syncing the folder creates two sheets under the experiment page:
-
-- `runs`: one row per benchmark run. Columns are the config scalars, the start time, whether it succeeded, and links to the measurement artifacts.
-- `analysis`: one row per analysis execution.
-
-```bash
-python benchmarks/experiment.py experiments/my_experiment
-```
-
-That command does not touch the load instance. It still reads `./config.yml`, or `BENCHMARK_CONFIG` when set, so the runs sheet gets parameter columns. A benchmark run syncs the same page from the config it was given, so a separate sync is optional.
-
-## Config
-
-Run a tracked example directly, or copy it into the experiment's ignored config folder:
+Run commands from the repository root using the project environment:
 
 ```sh
-python benchmarks/run_benchmark.py experiments/experiment_002/example.yml
-
-cp experiments/experiment_002/example.yml experiments/experiment_002/config/my_run.yml
-python benchmarks/run_benchmark.py experiments/experiment_002/config/my_run.yml
+uv run python benchmarks/run_benchmark.py experiments/record_scalability/example.yml
 ```
 
-Git stores the example and each folder's `.gitignore`, not the individual run configs. Existing local configs can still be used. On a fresh checkout, pass an example or a local config explicitly; the optional `./config.yml` fallback is not tracked.
-
-```yaml
-name: "My experiment: 10 records"
-experiment: experiments/my_experiment
-n_rows: 10
-n_repetitions: 3
-```
-
-`experiment` is a folder path, resolved from the working directory, not from the YAML file's directory. It is not a run-sheet column.
-
-Experiments with `parameters.py` record effective parameter values, including defaults omitted from YAML. Experiment 002 resolves its gene and molecule catalog sizes and link ranges, random seed, repetition count, and lookup batch size from the same defaults used by setup and queries.
-
-`name` is the display name of both the Lamin run and its run record. It must be a non-empty string of at most 150 characters. Older configs without it fall back to the run uid. Repeated executions may share a display name; their run uids and run records remain distinct. The run sheet uses `name` as its display index and stores the execution uid separately in `run_uid`. The record explicitly links both its run and the run's transform, so they appear as attachments. Existing run-uid indexes are migrated without discarding the old uid values.
-
-Run and analysis sheets store `started_at` with feature dtype `datetime`, as timezone-naive UTC for Hub rendering. Offset-aware start times are converted to UTC before the timezone is removed.
-
-Every other value becomes a column. Rules:
-
-- Values are scalars: `bool`, `int`, `float`, or `str`. No lists, no nested mappings, no nulls. A null key is skipped.
-- Keep the Python type of a key stable across every config of that experiment. The first run fixes the column dtype.
-- At least one scalar column is required.
-- Do not use reserved keys: `run_uid`, `started_at`, `succeeded`, `artifact`.
-- These keys are ignored as parameter columns: `name`, `experiment`, `experiment_script`, `setup_script`, `instance`, `load_instance`, `failed`. Do not put instance names in the config.
-- Document every key in the experiment README, including its type, minimum, and default.
-
-A batch runs every `.yml` and `.yaml` in the folder you pass. It wipes the load instance, then starts `run_benchmark.py` for that file. The next config starts only after that process exits. The batch script is not tracked and does not set `LAMIN_INITIATED_BY_RUN_UID`. Each config is recorded by its own `run_benchmark.py` run. The default folder is `./configs`, which is experiment 001, not every experiment. Pass the experiment's own config folder. To run a subset, copy only those files into an empty folder. A leftover YAML in that folder will also run. Filenames sort with numbers in order, so `n_rows_10.yml` runs before `n_rows_100.yml`.
-
-A failed config does not stop the batch. A failed wipe does.
-
-## Transform keys and Git references
-
-The runner uses `benchmarks/experiments/<experiment folder name>` as its transform key, for example `benchmarks/experiments/experiment_002`. Each experiment has its own transform family even though they execute the same runner script. Config names label runs and result records; changing the record count does not change the transform key.
-
-The runner allows uncommitted changes, untracked configs, and commits that have not been pushed. The experiment and config must be inside this repository, and the required source and dependency files must exist. These checks happen before setup or query writes to the load instance.
-
-Each run's `reference` is the repository URL pinned to its full HEAD commit SHA. Its transform's `reference` links to `benchmarks/run_benchmark.py` at that commit. `run.extra_data["git"]` stores the repository, commit, branch, config and experiment URLs, `dirty`, and a `changes` list covering staged, unstaged, and untracked files. `published` indicates whether local `origin` remote-tracking refs contain the commit; it does not query GitHub. A dirty checkout or unpublished commit is flagged in the run log. Git links show the committed baseline, so local changes and untracked files are not included, and links to unpublished commits may be unavailable until pushed. These local changes are not archived by this metadata.
-
-The project uses the published `lamindb==2.12.0` release. The metadata records versions of the six Lamin dependencies; if a dependency is installed as editable, it also records its Git commit and dirty status. A dirty dependency is flagged in the log and metadata. SSH origins are converted to browser URLs without including credentials. Modal installs the default project dependencies exported from `uv.lock` into `requirements-modal.txt`. Regenerate that file after dependency changes with `uv export --frozen --no-dev --no-hashes --no-emit-project --output-file requirements-modal.txt`.
-
-Git references describe the checkout used when a new run starts. They do not use a moving branch URL.
-
-The Modal launcher uploads only `benchmarks/`, `experiments/`, `pyproject.toml`, and `uv.lock`, respecting the root `.gitignore` and excluding `.git` directories and local `config/` and `configs/` folders. It explicitly adds the selected config when it is in one of those folders. It uses `requirements-modal.txt` to build the environment. Its local entrypoint captures the repository URL, commit, branch, dirty status, changed paths, and publication status for each launch, then passes that snapshot to the remote runner through `BENCHMARK_GIT_PROVENANCE`. Dependency versions are collected inside the remote environment. Local runs continue to read Git directly. Configs passed to Modal must be inside `benchmarks/` or `experiments/`.
-
-The Modal launcher is `benchmarks/modal_benchmarks.py`. Run it from the repository root:
+Or run the same config on Modal:
 
 ```sh
 modal run --detach --profile alex-76941 --env Benchmarks benchmarks/modal_benchmarks.py \
-  --config experiments/experiment_002/example.yml --region eu-west
+  --config experiments/record_scalability/example.yml --region eu-west
 ```
 
-It pins compute to `eu-west` by default; pass `--region` to override it. Each remote invocation logs `MODAL_REGION` and `MODAL_CLOUD_PROVIDER`, and the benchmark run saves these plus its container ID in `run.extra_data["modal"]`. Keep the region, CPU, and memory settings constant across a size ladder. Experiment 002 uses 11 repetitions and lookup batch size 20 by default, saves timings for each insertion batch of up to 1,000 records, and runs `ANALYZE` after population before query timing.
+The tracking instance (`LAMIN_CURRENT_INSTANCE`, default
+`laminlabs/lamindb-benchmarks`) stores runs, observations, measurement artifacts,
+and analyses. The load instance (`LAMIN_LOAD_INSTANCE`, default
+`laminlabs/lamindb-load-test`) receives the operations under test. They must be
+different. The child process connects only to the load target; the parent keeps
+its connection to the tracking instance. Only the parent uploads tracking
+records and artifacts.
 
-## Setup and query
+## Parent and child contract
 
-Both connect to `LAMIN_LOAD_INSTANCE`, or `laminlabs/lamindb-load-test` when that is unset. Read parameters with `benchmarks.config.read_config` and `require_int`. The runner sets `BENCHMARK_CONFIG` to the file it was given.
+`benchmarks/run_benchmark.py` is the **parent**. The experiment's `run.py` is the
+**child**, launched as a separate Python process with the same interpreter and
+the repository root as its working directory:
 
-Do not call `ln.track()` or `ln.finish()` on the load instance. Finish fails while that instance's Storage row is missing. The parent run on the benchmark instance is the tracked execution. The runner removes `LAMIN_INITIATED_BY_RUN_UID` from the child environment. Do not put it back.
+```sh
+python experiments/<name>/run.py /absolute/path/config.yml /absolute/path/output
+```
 
-Only `reset.py` and the batch wipe the load instance. One call to `run_benchmark.py` does not. A wipe truncates user tables, including records, features, and schemas, and clears write events. It does not drop indexes, columns, or extra tables. Bionty tables, migrations, users, storage, runs, and transforms are kept. Recreate types, features, and catalogs in `setup.py` on every run. Do not assume rows from a smaller config are still there. If the experiment creates an index, column, or table, drop it before the process exits, including on failure. A leftover index on `lamindb_recordjson`, or a leftover column or index on `lamindb_recordrecord`, would change later experiments.
+| Responsibility | Parent | Experiment child |
+| --- | --- | --- |
+| Select the experiment and validate the config | Reads config and calls optional `resolve_parameters` | Reads the same config and applies its own defaults/resolver |
+| Track execution | Creates the Lamin run, transform, and experiment-run record | Does not call `ln.track()` or write to the benchmarks instance |
+| Perform the workload | Starts and supervises the child | Connects to the load target and performs writes, queries, and maintenance |
+| Choose output location | Allocates a fresh temporary output directory and passes it as argument 2 | Uses that directory; never chooses a separate results location |
+| Publish measurements | Polls completed observation folders and uploads records/artifacts | Writes files, closes them, then atomically publishes their folder |
+| Publish runtime information | Saves `run_info.yml` values on the run record and in run metadata | Optionally publishes one immutable metadata snapshot |
+| Report completion | Drains ready output, records success/failure, and finishes tracking | Exits zero on success, nonzero on failure |
 
-`setup.py` may write measurements too. The insert is the usual one. `query.py` runs only if setup exits 0. After both exit, the runner uploads every measurement in `BENCHMARK_RESULTS_DIR`, even when the exit code is non-zero. `succeeded` is true only for exit code 0.
+The child receives the config path as argument 1, also exposed as
+`BENCHMARK_CONFIG`. The parent sets the child's `LAMIN_LOAD_INSTANCE` and
+`LAMIN_CURRENT_INSTANCE` to the load target. The parent's connection remains on
+the tracking instance. A Notion experiment uses its Notion credentials instead
+of connecting to the Lamin load target.
 
-Time calls with `benchmarks.timing.time_calls`. The first repetition is the cold call. Later repetitions should reuse the same sampled ids. The timed function's return value goes in the measurement `value` column. Return the actual row count, not the number of ids you asked for.
+There are no setup/query stages, stdout notification messages, or child-side
+upload calls. Logs go to inherited stdout/stderr and are streamed to the terminal
+or Modal logs. The parent checks output about once per second between uploads.
+The parent does not automatically run downstream analysis scripts or reset the
+load database. The child controls any pauses, milestones, and database `ANALYZE`.
 
-Facts that disappear when the load instance is wiped must be written during the run: insert time, write-event counts, auxiliary-table counts, disk, cache, and `EXPLAIN`. Analysis must not reconnect to the load instance to reconstruct them.
+### Required experiment files
 
-If the experiment needs server SQL, keep it in the experiment folder. Use LaminDB's Django cursor. A fresh psycopg connection fails RLS with `JWT is not set`. Do not put a literal `%` in SQL passed to psycopg; pass the pattern as a parameter. Django may log `set_token` and the real `SELECT` as one string. Split on semicolons and skip `set_token` before `EXPLAIN`. Leave RLS enabled. Use the normal schema and indexes. A scan with indexes removed is a different experiment, not a flag in this runner.
+The runner requires these files in `experiments/<name>/`:
 
-Use these words: **records** for `Record` rows, **events** for `DbWrite` rows, **auxiliary table entries** for link tables. Do not say "records loaded" or "write amplification".
+- `README.md`: YAML frontmatter with a nonempty `description`, followed by notes.
+  The parent uses these to describe the experiment record.
+- `run.py`: accepts exactly two positional arguments, `CONFIG OUTPUT_DIRECTORY`.
 
-## Measurements
+Also include `example.yml` as a tracked input example and `config/.gitignore`
+to keep local run-specific configs untracked.
 
-Write them with `benchmarks.measurements.write_measurement`. If `BENCHMARK_RESULTS_DIR` is unset, the call returns `None` and the script still finishes. That is how a query can be tried outside the runner.
+For example, an experiment README begins with:
 
-The parquet has exactly three columns: `repetition`, `latency_ms`, `value`. Do not add columns. Extra keys in a row are dropped. A one-shot fact still uses one row, for example repetition 1 and the fact in `value` or in features.
+```markdown
+---
+description: What this experiment measures
+---
+
+# My experiment
+
+Workload and measurement definitions go here.
+```
+
+A config is a YAML mapping. `experiment` selects the repository-relative folder:
+
+```yaml
+experiment: experiments/my_experiment
+n_rows: 1000
+```
+
+Include at least one non-null experiment parameter in addition to `experiment`.
+
+Optional `name` sets the run display name; otherwise its UID is used. Other
+experiment parameters become run-sheet features. An optional `parameters.py`
+can expose `resolve_parameters(params: dict) -> dict`; the parent calls it before
+tracking so effective defaults are recorded and invalid input fails early.
+**The resolved dictionary is not written back to the config file.** The child
+must use that same resolver/default logic when reading the supplied config.
+Helpers and separate `analyze_*.py` scripts may live alongside `run.py`.
+
+### Output directory layout
+
+Only the following published paths are consumed by the parent:
+
+```text
+OUTPUT_DIRECTORY/
+├── run_info.yml                  # Optional, one immutable runtime-info snapshot
+├── .pending/                     # Unpublished work; ignored by the parent
+│   └── temporary-observation/
+└── observations/
+    └── population_1_000/         # One completed observation; folder name = record name
+        ├── manifest.yml         # Optional observation features
+        ├── README.md            # Optional observation notes
+        ├── timings.parquet      # Measurement artifact
+        ├── query_plans.html      # Another measurement artifact
+        └── nested/
+            └── details.json     # Nested files also become artifacts
+```
+
+Files elsewhere in the output directory are not uploaded. There is no required
+measurement filename or table schema: each experiment defines and documents its
+own. Parquet files must be valid DataFrames; other measurement files are saved
+as file artifacts. Use browser-readable HTML for reports, or formats such as
+JSON, CSV, and images as appropriate. Close all files before publishing.
+
+### Observation metadata files
+
+`manifest.yml` is an optional YAML mapping. Each non-null top-level value becomes
+an observation feature. For example:
+
+```yaml
+n_rows: 1000
+starting_rows: 0
+n_repetitions: 11
+recorded_at: "2026-10-25T09:04:58Z"
+```
+
+Keys must be nonempty strings of at most 150 characters. Values can be booleans,
+integers, finite floats, strings, homogeneous scalar lists, or JSON-compatible
+mappings. Mixed-type lists are rejected; empty lists have dtype `list[str]`.
+Null-valued observation keys are omitted. Keep a feature's dtype consistent
+across observations in the same sheet. Quote timestamp strings: YAML otherwise
+may parse a timestamp into a Python object instead of a JSON-compatible string.
+
+`recorded_at` has special meaning: it must be an ISO 8601 string with an explicit
+timezone, and is stored as a datetime. It should describe measurement completion,
+not upload time. If omitted, the parent uses the observation record's creation
+time. The helper can supply it automatically with `timestamped=True`.
+
+`README.md` is optional UTF-8 Markdown; its full contents become the observation
+record's notes. These two top-level control files are **not** uploaded as
+artifacts. Every other file in the folder, including nested files, becomes an
+artifact. The same filenames inside nested folders are ordinary artifacts.
+
+An observation folder's name becomes its record name. It must be nonempty, at
+most 150 characters, and must not start with a dot or contain `/` or `\`.
+Symlinks and non-file/non-directory entries are rejected. Names must be unique
+within an execution; the same name in different executions creates distinct
+records. `artifact`, `experiment_run`, `observation`, and `observation_uid` are
+reserved metadata keys managed by the parent. Do not put credentials in configs,
+manifests, reports, or measurement files.
+
+### Run information
+
+`run_info.yml` is an optional YAML mapping for **observed runtime facts**, such as
+the detected initial population:
+
+```yaml
+starting_rows: 0
+```
+
+The parent saves these values as feature columns on the experiment-run record
+and under `Run.extra_data["run_info"]`. They do not modify `Run.params`, which
+contains the effective input config. No observation or artifact is created.
+
+Publish this file once per execution, before long-running work if the facts are
+already known. It must be a nonempty mapping of non-null feature values, with
+the same supported value types as manifests. It cannot overwrite any config
+parameter or a parent-managed run column. Treat it as immutable after publication.
+Write a temporary file in the output directory and atomically rename it to
+`run_info.yml`, or use `write_run_information(output, values)`.
+
+### Minimal child example
+
+This runnable example measures creation of an in-memory list. Replace that
+operation with the experiment's workload; the output protocol stays the same.
 
 ```python
-write_measurement(
-    "uid_lookup",
-    rows_from_timed(timed),
-    key=f"benchmarks/measurements/{NAME}/uid_lookup.parquet",
-    description="Timed uid lookup.",
-    features={
-        "measurement_kind": "lookup",
-        "query_name": "uid_lookup",
-        "n_rows": n_rows,
-    },
+import sys
+import time
+from pathlib import Path
+
+import pandas as pd
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
+from benchmarks.config import read_config
+from benchmarks.observations import (
+    child_arguments,
+    observation,
+    write_run_information,
 )
+
+
+def main():
+    args = child_arguments()
+    params = read_config(args.config)
+    write_run_information(args.output, {"starting_rows": 0})
+
+    started = time.perf_counter()
+    values = list(range(params["n_rows"]))
+    elapsed_ms = (time.perf_counter() - started) * 1000
+
+    with observation(args.output, "list_creation", {"n_rows": len(values)}) as folder:
+        pd.DataFrame([{"latency_ms": elapsed_ms, "value": len(values)}]).to_parquet(
+            folder / "timings.parquet", index=False
+        )
+
+
+if __name__ == "__main__":
+    main()
 ```
 
-The key is a relative `.parquet` path. The runner inserts the run uid after the experiment folder name, so `benchmarks/measurements/<name>/uid_lookup.parquet` is stored as `benchmarks/measurements/<name>/<run uid>/uid_lookup.parquet`. The file stem is the `name` argument. No slashes.
+No Lamin imports are needed for the filesystem handoff. Experiments targeting
+Lamin can import it for their **load operations**, while leaving tracking and
+measurement uploads to the parent.
 
-Feature values are Python `bool`, `int`, `float`, or `str`. Not numpy scalars, not `None`, not lists. Omit a missing number instead of storing null. Feature identity on the benchmark instance is the name, not the experiment. Reuse a name only with the same dtype. Pick a new name rather than asking the runner for a per-experiment feature namespace.
+### Publication and failure expectations
 
-Tag each file so analysis can tell lookups from other facts:
+Write each observation into a temporary directory on the **same filesystem**,
+then rename the directory to `OUTPUT_DIRECTORY/observations/<name>` only when
+all measurements and metadata are complete. The `observation(...)` helper does
+this using `.pending/`; an exception inside its context leaves work unpublished.
+It also converts legacy `write_measurement` metadata into parquet columns before
+publishing. New experiments can simply write their measurement files directly.
 
-- `measurement_kind`: `lookup`, `insert`, `explain`, `health`, or `distribution`
-- `query_name`: stable name of that fact
+A rename is the completion signal. Once published, never modify, rename, or
+delete that folder. There is no acknowledgement the child must wait for. Hidden
+folders inside `observations/` are ignored and can also be used for staging.
 
-Analysis that plots latency must ignore files whose kind is not `lookup`.
+The parent validates a ready folder, uploads its files, then creates the
+observation record. Artifact keys include experiment, execution UID, observation
+name, and relative filename; retries reuse files already saved at those keys.
+The observation's direct artifact links contain only that observation's files.
+Creator provenance is retained through `record.run` and the `experiment_run`
+feature. Observations do not tag the entire execution or transform, which would
+include other milestones' outputs in the Artifacts tab.
 
-## Analysis
+Malformed output stops the run. Other upload failures are retried up to three
+attempts; persistent failure stops the child and marks the execution unsuccessful.
+After either a successful or failed child exit, the parent drains ready output,
+including `run_info.yml`. Uploaded observations survive later failures. Only
+uploaded results are durable: unfinished work, or published output not yet
+uploaded, can be lost if the container is killed. Local results directories are
+retained on failure and removed after success; Modal's filesystem is ephemeral.
 
-An analysis script connects to the benchmark instance, calls `ln.track()` and `ln.finish()`, and reads artifacts from LaminDB. Do not read the local parquet the runner already uploaded.
+A new execution gets a fresh output directory and Lamin run. The parent neither
+resumes the child process nor rolls back load-database changes. Each experiment
+must define its own resume behavior; `record_scalability` detects existing rows.
 
-Find the experiment with `record_by_name` under `LOAD_BENCHMARKS`, then its `runs` child with `require_child`. Keep rows whose `succeeded` feature is true. Load artifacts through the run's `artifact` feature. For a size ladder, use the latest succeeded run at each `n_rows`, because each config started from an empty database. Say so in the notes. Pooling every historical run mixes different repetition counts. Use `record.uid` when selecting records and `run_uid_of(record)` for an output table's `run_uid`; display names can repeat.
+## Tracking layout
 
-Upload a table and an SVG plot. Then:
+Under each experiment page:
 
-```python
-record_analysis(
-    experiment,
-    [table, plot],
-    instance=instance,
-    title="...",
-    description="...",
-    notes=NOTES,
-)
+- `runs`: one record per execution, created before the child starts. Effective
+  config values and published run information are feature columns. `environment`
+  is `local` or `modal`, set by the parent. Each row links its Lamin run and
+  transform. `succeeded` stays false until the child exits zero and uploads finish.
+- `observations`: one record per published observation, linking its measurements.
+  The first column, `observation`, links to the row's own record, followed by
+  `recorded_at`. The run record does not duplicate observation artifact links.
+- `analysis`: plots and summary tables produced by separately run analysis scripts.
+
+`run_uid`, `started_at`, `succeeded`, `environment`, and `artifact` are managed by
+the parent and cannot be supplied as config/run-info parameters. The config keys
+`name` and `experiment` select runner behavior rather than run-sheet columns.
+The environment is also saved in `Run.extra_data["environment"]`; Modal region,
+provider, and container ID remain under `Run.extra_data["modal"]`. It is an
+execution property, not an experiment input or an observation feature.
+
+Historical scalar `n_rows` values are preserved as singleton lists when that
+experiment's run sheet adopts milestone lists. The global scalar feature and
+other experiments are unchanged. Omitted parameters do not delete historical
+columns. Analyses support both historical run-linked artifacts and newer
+observation-linked tables, including completed observations from failed runs.
+
+## Local configurations
+
+Copy an example into an experiment's ignored config folder and edit it:
+
+```sh
+cp experiments/record_scalability/example.yml experiments/record_scalability/config/my_run.yml
+uv run python benchmarks/run_benchmark.py experiments/record_scalability/config/my_run.yml
 ```
 
-`title` is a column on the analysis sheet. `description` and `notes` are the record description and readme. The notes say what was analyzed, how it is reported, and what each artifact is. `record_analysis` requires the active `ln.track()` run.
+The legacy root `config.yml` and `configs/` remain ignored. The optional local
+`./config.yml` fallback is still accepted, but on a fresh checkout pass an example
+or local config explicitly. Do not put credentials in tracked configs.
 
-Save plots with `figure.write_image(path, format="svg")`. Do not upload HTML. For a size ladder, treat record count as a category so the sizes are evenly spaced. Use bars or unconnected markers. Put the spread in error bars or a boxplot. Do not connect sizes with a line unless asked.
+## Record scalability growth sweeps
 
-Suggested keys: `benchmarks/analysis/<name>/<plot>.parquet` and the matching `.svg`.
+`record_scalability` is a separate experiment type under `Load Benchmarks`, with
+its own runs, observations, analysis sheets, and Transform history. Historical
+`experiment_002` records, runs, and analyses stay under that experiment.
+Use `experiment: experiments/record_scalability` for new executions. The load
+database is independent of this tracking separation and is still resumed unless
+explicitly reset.
 
-## Scripts
+```yaml
+experiment: experiments/record_scalability
+n_rows: [1000, 10000, 100000]
+n_repetitions: 11
+n_batch: 20
+```
 
-None of these name a particular experiment.
+`n_rows` is a nonempty, strictly increasing list of positive integers. A positive
+integer is accepted as a single milestone. Unsorted lists, duplicates, booleans,
+negative values, zero, and fractional values fail before any database writes.
+The targets are total intervention populations, not numbers of additional rows.
 
-- `benchmarks/experiment.py <folder>` syncs the page. It does not touch the load instance.
-- `benchmarks/run_benchmark.py [config]` tracks one config on the benchmark instance, then runs that folder's `setup.py` and `query.py` on the load instance.
-- `benchmarks/batch_benchmarks.py --yes [folder]` wipes the load instance, then starts `run_benchmark.py` for every YAML file in that folder. It does not record a batch run.
-- `benchmarks/reset.py --yes` wipes the load instance. It refuses to run without `--yes`.
+At startup, record scalability detects the existing benchmark population and saves
+`starting_rows` on the experiment-run record and in run metadata, without a
+startup observation. It checks catalog compatibility and, when
+available, the workload metadata stored on the intervention type. If an old
+config specifies `existing_rows`, it is an assertion against the detected count.
+Milestones below that count are skipped; an equal milestone is evaluated without
+inserting. If every milestone is below it, the execution fails after recording
+its starting state. Only one writer should operate on a load instance at a time;
+external population changes detected between milestones stop the execution.
 
-`benchmarks/config.py`, `benchmarks/measurements.py`, and `benchmarks/timing.py` are imported by experiments. `benchmarks/setup.py` only creates plain records. An experiment does not have to use it.
+For each milestone, the child inserts up to that population, refreshes planner
+statistics with `ANALYZE`, runs queries, and publishes an observation named like
+`record_scalability_2026-10-25T08:30:00Z_n_rows_10_000`. The timestamp is
+the observation's completion time in UTC, at second precision. Maintenance runs in a dedicated subprocess so elevated
+credentials and Django state do not leak into query timing. There is no README
+in record scalability observations.
 
-## Do not change benchmarks for
+Each milestone contains all insert timing rows collected since this execution
+started, query repetition and EXPLAIN tables, health, and one
+`table_distribution.parquet` with one row per database table. Table names,
+counts, sizes, and bloat are columns, not artifact features. These cumulative
+insert tables overlap: analysis must use the latest completed snapshot for a
+run rather than concatenate its milestone snapshots. A later run's insertion
+history starts anew at its detected population.
 
-Solve these in the experiment folder:
+In addition to the three UID lookups, each milestone times the latest 100
+interventions ordered by the UTC `treatment_started_at` feature and by the native
+`created_at` field. A sixth query returns the latest 100 interventions linked to
+`query_gene` (default `gene_000`); the target must exist in the configured gene
+catalog, and fewer than 100 matches are valid. A seventh query combines this gene
+with `query_protocol` and a fixed treatment-date window, orders by newest treatment,
+and returns up to 100 interventions with all features. Its defaults are
+`protocol_B` and `2025-01-01T00:00:00Z <= treatment_started_at < 2025-07-01T00:00:00Z`;
+see the full example config for configurable bounds. All seven operations use
+`n_repetitions`. Existing populations
+without the treatment timestamp must be reset or backfilled before resuming.
+`query_plans.html` shows each Python call, its complete formatted data-SELECT
+list, and matching plans; `explain.parquet` combines diagnostics for all seven.
 
-- another query, record type, or feature dtype
-- insert timing, `EXPLAIN`, table sizes, or server health
-- another analysis or plot
-- a helper module imported by setup or query
-- a fact that does not fit the three parquet columns: put it in features, or write one measurement per item
-- a subset of a ladder: copy those YAML files to an empty folder
+## Provenance and Modal
 
-Stop and ask before changing `benchmarks/` if the experiment needs a third process the runner must launch, a measurement column other than `repetition`, `latency_ms`, and `value`, a non-scalar config value, or a second load instance.
+Each execution records its repository commit, branch, dirty state, config path,
+and editable dependency versions in `run.extra_data['git']`. Its transform tracks
+the experiment's `run.py`, and its reference pins that file at the recorded
+commit. Git links show the committed baseline; local changes and ignored
+configs are not reconstructable from that link alone.
+
+The project uses `lamindb==2.12.0`. Modal builds dependencies from
+`requirements-modal.txt`, generated with:
+
+```sh
+uv export --frozen --no-dev --no-hashes --no-emit-project --output-file requirements-modal.txt
+```
+
+The launcher uploads `benchmarks/`, `experiments/`, `pyproject.toml`, and `uv.lock`.
+Git metadata, environment files, virtual environments, and local config folders
+are excluded. Only the selected local config is added explicitly. Default
+compute region is `eu-west`; the run records its region, provider and container
+ID. Keep resource settings consistent when comparing experiments.
+
+Modal uses the same parent/child contract as local execution. The launcher starts
+`benchmarks/run_benchmark.py` inside the container; that parent allocates the
+output folder, starts the experiment's `run.py CONFIG OUTPUT_DIRECTORY`, and
+uploads `run_info.yml` values and ready observations while the child runs. No
+experiment-specific Modal function, deployment, or output-volume setup is needed.
+The launcher explicitly marks the execution `modal`; the run sheet's
+`environment` column and `Run.extra_data["environment"]` retain this value.
+Direct local launches are marked `local`.
+
+Before submitting a job, the launcher checks the config mapping, the
+repository-relative experiment path, and the required `README.md` and `run.py`.
+Both the selected config and experiment code must be under `benchmarks/` or
+`experiments/`, the two uploaded source folders. A selected config inside an
+ignored `config/` or `configs/` folder is added explicitly; other local configs
+remain excluded.
+Effective parameter validation runs in the container, where secrets are
+available. In Modal environment `Benchmarks`, mount `lamin-benchmarks` with
+`LAMIN_API_KEY`; Notion runs additionally use `--notion-secret notion-benchmarks`.
+`--detach` lets the submitted Modal job continue after the local CLI disconnects.
+
+## Reset explicitly
+
+```sh
+uv run python benchmarks/reset.py --yes
+```
+
+This is destructive and separate from running an experiment. It truncates load
+instance user tables and clears write events, while retaining system tables.
+Reset is untracked maintenance and creates no run or transform in the benchmarks
+tracking instance.
+It does not remove experimental indexes or columns. Experiments that add DDL
+must clean it up, including on failure. Record scalability resumes existing data;
+other experiments define their own population/cleanup behavior.
+
+The experiment record can also be synced independently:
+
+```sh
+BENCHMARK_CONFIG=experiments/record_scalability/example.yml \
+  uv run python benchmarks/experiment.py experiments/record_scalability
+```
+
+Use **records** for `Record` rows, **events** for `DbWrite` rows, and
+**auxiliary table entries** for link and feature-value tables.
