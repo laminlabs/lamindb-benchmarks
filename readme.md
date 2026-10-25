@@ -16,7 +16,7 @@ uv run python benchmarks/run_benchmark.py experiments/record_scalability/example
 Or run the same config on Modal:
 
 ```sh
-modal run --detach --profile alex-76941 --env Benchmarks benchmarks/modal_benchmarks.py \
+uv run --with modal python -m modal run --detach --profile alex-76941 --env Benchmarks benchmarks/modal_benchmarks.py \
   --config experiments/record_scalability/example.yml --region eu-west
 ```
 
@@ -377,7 +377,8 @@ uv export --frozen --no-dev --no-hashes --no-emit-project --output-file requirem
 
 The launcher uploads `benchmarks/`, `experiments/`, `pyproject.toml`, and `uv.lock`.
 Git metadata, environment files, virtual environments, and local config folders
-are excluded. Only the selected local config is added explicitly. Default
+are excluded. The selected YAML is passed as a function argument and written to its config
+path inside the container before the runner starts. Default
 compute region is `eu-west`; the run records its region, provider and container
 ID. Keep resource settings consistent when comparing experiments.
 
@@ -394,7 +395,7 @@ Before submitting a job, the launcher checks the config mapping, the
 repository-relative experiment path, and the required `README.md` and `run.py`.
 Both the selected config and experiment code must be under `benchmarks/` or
 `experiments/`, the two uploaded source folders. A selected config inside an
-ignored `config/` or `configs/` folder is added explicitly; other local configs
+ignored `config/` or `configs/` folder is sent as YAML content; other local configs
 remain excluded.
 Effective parameter validation runs in the container, where secrets are
 available. In Modal environment `Benchmarks`, mount `lamin-benchmarks` with
