@@ -1,0 +1,5 @@
+num_studies: 4
+num_datasets_per_study: 8
+with_index: true
+seed: 0
+table_type: csv
