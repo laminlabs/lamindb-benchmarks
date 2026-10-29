@@ -1,0 +1,18 @@
+# syntax=docker/dockerfile:1
+ARG NODE_IMAGE=node:22-bookworm-slim
+ARG BASE_IMAGE
+FROM ${NODE_IMAGE} AS harness
+ARG CODEX_VERSION
+RUN test -n "${CODEX_VERSION}" \
+    && npm install --global --no-audit --no-fund @openai/codex@${CODEX_VERSION} \
+    && codex --version
+
+FROM ${BASE_IMAGE}
+ARG CODEX_VERSION
+USER root
+COPY --from=harness /usr/local/bin/node /usr/local/bin/node
+COPY --from=harness /usr/local/lib/node_modules/@openai /opt/openai
+RUN ln -s /opt/openai/codex/bin/codex.js /usr/local/bin/codex
+LABEL org.lamin.benchmark.harness="codex" \
+      org.lamin.benchmark.codex-version=${CODEX_VERSION}
+USER agent

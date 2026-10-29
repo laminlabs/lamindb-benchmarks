@@ -1,0 +1,3 @@
+The benchmark corpus is registered in Lamin instance {location}. This instance contains only the benchmark corpus.
+Use the installed LaminDB Python package to discover datasets and inspect their metadata. The instance slug is also available as LAMIN_CURRENT_INSTANCE. Authentication is provided through the environment.
+You can connect with lamindb_setup.connect(os.environ["LAMIN_CURRENT_INSTANCE"]) before importing lamindb. This is a read-only discovery task; do not track this chat as a Lamin run or create records.

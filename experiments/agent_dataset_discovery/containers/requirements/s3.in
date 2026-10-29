@@ -1,0 +1,3 @@
+-r base.in
+boto3>=1.43
+awscli>=1.45

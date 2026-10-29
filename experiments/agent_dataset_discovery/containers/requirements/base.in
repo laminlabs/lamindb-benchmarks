@@ -1,0 +1,8 @@
+scanpy==1.11.5
+# Match the AnnData upper bound supported by the benchmark's LaminDB release.
+anndata==0.12.3
+duckdb
+pandas==2.3.3
+pyarrow
+# AWS SDKs used by both backends require dateutil below 3.
+python-dateutil<3

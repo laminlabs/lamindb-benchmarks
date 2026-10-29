@@ -277,6 +277,7 @@ def main(argv: list[str] | None = None) -> None:
         env = os.environ.copy()
         env.pop("LAMIN_INITIATED_BY_RUN_UID", None)
         env[CONFIG_ENV] = str(config_path)
+        env["BENCHMARK_TRACKING_INSTANCE"] = instance
         env[BENCHMARK_INSTANCE_ENV] = load_instance
         env[LOAD_INSTANCE_ENV] = load_instance
         env["PYTHONUNBUFFERED"] = "1"

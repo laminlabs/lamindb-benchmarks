@@ -1,0 +1,11 @@
+experiment: experiments/agent_dataset_discovery
+name: human-scrna-lamin
+chat_cli: codex
+codex_auth: chatgpt
+model: gpt-6.1-sol
+effort: medium
+prompt: Human scRNA-seq datasets
+backend: lamin
+timeout_seconds: 600
+cpus: 2
+memory_mb: 8192

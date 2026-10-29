@@ -1,0 +1,11 @@
+# syntax=docker/dockerfile:1
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+ARG BACKEND
+USER root
+COPY requirements/${BACKEND}.txt /opt/requirements/backend.txt
+RUN python -m pip install --require-hashes -r /opt/requirements/backend.txt \
+    && python -m pip check
+LABEL org.lamin.benchmark.backend=${BACKEND}
+ENV DISCOVERY_BACKEND=${BACKEND}
+USER agent

@@ -1,0 +1,26 @@
+# syntax=docker/dockerfile:1
+ARG PYTHON_IMAGE=python:3.13-slim-bookworm
+FROM ${PYTHON_IMAGE}
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    MPLBACKEND=Agg
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl git ripgrep libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+COPY requirements/base.txt /opt/requirements/base.txt
+RUN python -m pip install --require-hashes -r /opt/requirements/base.txt \
+    && python -m pip check
+
+RUN groupadd --gid 1000 agent \
+    && useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash agent \
+    && mkdir -p /workspace /outputs /home/agent/.codex /home/agent/.cache/numba \
+    && chown -R agent:agent /workspace /outputs /home/agent
+ENV HOME=/home/agent \
+    NUMBA_CACHE_DIR=/home/agent/.cache/numba \
+    CODEX_HOME=/home/agent/.codex
+WORKDIR /workspace
+USER agent
+CMD ["bash"]

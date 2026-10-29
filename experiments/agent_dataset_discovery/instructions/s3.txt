@@ -1,0 +1,3 @@
+The benchmark corpus is stored under {location} (also available as DISCOVERY_S3_URI).
+Use the installed AWS CLI, boto3, and Python data tools to discover datasets and inspect their metadata. AWS authentication and region are provided through the environment.
+Begin at the corpus prefix; you do not need to list all buckets or the bucket root. The corpus README describes the layout and metadata definitions.

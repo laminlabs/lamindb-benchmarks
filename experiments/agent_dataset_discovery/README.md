@@ -1,8 +1,17 @@
+---
+description: Compare agent dataset discovery time and token usage across S3 metadata and a Lamin catalog.
+---
+
 # Agent dataset discovery
 
 Compare discovery through a Lamin catalog, S3 with a shared metadata index, and
 S3 with study-level metadata only. The setup script creates a local S3-style
 folder tree; it does not upload files or register them in Lamin.
+
+To run a discovery chat through `benchmarks/run_benchmark.py`, see
+[`RUNNING.md`](RUNNING.md) for configs, backend environment variables, credentials,
+S3 prefix restrictions, and local Docker execution. The corpus generator and chat
+runner use separate configuration files.
 
 ## Generate a corpus
 
@@ -43,6 +52,10 @@ existing content, including a previous index. It requires no credentials or
 network access.
 
 ## Source and generated files
+
+The isolated chat image definitions and build instructions live in
+[`containers/`](containers/README.md). A shared data-science base is extended with
+an S3 or Lamin backend and then a coding harness (currently Codex).
 
 - `setup.py`: command-line entry point.
 - `example.yml`: example configuration.
@@ -244,6 +257,58 @@ See the [verified import run](https://lamin.ai/allavinner/playground/run/C7n5b3t
 [study update run](https://lamin.ai/allavinner/playground/run/yqIo6fNC59TaiIeU),
 [Lamin schemas](https://docs.lamin.ai/lamindb.schema), and
 [artifact creation](https://docs.lamin.ai/lamindb.artifact).
+
+## Upload a corpus to S3
+
+`setup_s3.py FOLDER S3_URI` validates the corpus using the same metadata checks as
+the Lamin importer, then uploads every regular file recursively with unchanged
+bytes and relative paths. It supports CSV and Parquet, includes the index only
+when present locally, and rejects symlinks. Keep only corpus files in the folder.
+
+```sh
+# Local validation and upload plan only; no AWS requests or credentials needed:
+uv run python experiments/agent_dataset_discovery/setup_s3.py experiments/agent_dataset_discovery/raw/pilot s3://YOUR_BUCKET/corpora/pilot/ --dry-run
+
+# Actual upload, when ready:
+uv run python experiments/agent_dataset_discovery/setup_s3.py experiments/agent_dataset_discovery/raw/pilot s3://YOUR_BUCKET/corpora/pilot/ --profile corpus-writer --region eu-west-1
+```
+
+The bucket must already exist and the destination prefix must be nonempty in the
+URI but contain no objects in S3. The script checks for existing objects before
+uploading, so an old shared index cannot remain in an unindexed case. It does not
+create buckets, delete objects, or merge into an existing corpus. Uploads are not
+atomic: a failure leaves partial files; inspect them and use a fresh prefix or
+clean up explicitly before retrying. Do not run concurrent uploads to the same
+prefix. A dry run validates local files only, not destination access or emptiness.
+
+Authentication uses boto3's normal host credential chain (`AWS_PROFILE` or
+standard `AWS_*` variables), with optional `--profile` and `--region` overrides.
+Use a writer identity with list and upload access to the destination, separate
+from the experiment reader. The uploader does not use `DISCOVERY_AWS_*` variables.
+See [boto3 file uploads](https://docs.aws.amazon.com/boto3/latest/reference/services/s3/client/upload_file.html).
+
+## Save benchmark prompts
+
+`create_prompt.py` saves a short, named prompt in `laminlabs/lamindb-benchmarks`
+under `Load Benchmarks → agent_dataset_discovery → prompts`. It gets or creates
+each record type and gives the `prompts` type a schema with a required string
+feature named `prompt`. The prompt record's name is its short title; its `prompt`
+feature contains the exact supplied text, including whitespace and line breaks.
+
+```sh
+uv run python experiments/agent_dataset_discovery/create_prompt.py --name "Blood counts" --text "List every human peripheral-blood scRNA-seq dataset with documented unnormalized counts available."
+```
+
+For multiline text, use `--text-file /path/to/prompt.txt` instead of `--text`.
+The file must be UTF-8. `--instance` explicitly overrides the benchmark instance;
+the currently connected instance does not change the default destination.
+The script prints the resulting record URL and tracks its execution in Lamin.
+An identical name and text reuses the existing record. Different text under an
+existing name is rejected; use a new name to preserve earlier benchmark prompts.
+
+When asking Codex to “create a new prompt with this text …”, provide the actual
+text. Codex should choose a short, descriptive name and use this script, preserving
+the text verbatim. Example commands in this README are not automatically uploaded.
 
 ## Validation
 

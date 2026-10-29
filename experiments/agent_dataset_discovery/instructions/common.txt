@@ -1,0 +1,4 @@
+Search only the supplied benchmark corpus. Use its documented metadata to decide eligibility; report uncertainty when the metadata is insufficient.
+Python includes Scanpy, pandas, PyArrow, and DuckDB. You may write scripts, download metadata, and build temporary indexes in /workspace.
+Do not modify remote data. Do not search the public web for datasets. Do not print authentication secrets.
+Return your final answer with dataset identifiers and supporting metadata references. Do not stop at a plan.
